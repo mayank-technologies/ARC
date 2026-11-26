@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="arc_void">#FF050911</color>
+    <color name="arc_surface">#FF0B1322</color>
+    <color name="arc_cyan">#FF00E5FF</color>
+    <color name="arc_blue">#FF2979FF</color>
+    <color name="arc_teal">#FF1DE9B6</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">ARC</string>
+    <string name="accessibility_service_description">ARC Screen Vision reads on-screen text, skips YouTube ads, controls reels/videos, translates screen content, and auto-fills forms only when you command ARC.</string>
+    <string name="device_admin_description">Allows ARC to lock your screen immediately when you speak a lock command (force-lock only).</string>
+    <string name="notification_listener_description">Allows ARC to read notifications aloud from apps you explicitly enable in Settings.</string>
+    <string name="fg_service_channel_name">ARC Listening Service</string>
+    <string name="reminder_channel_name">ARC Reminders &amp; Alarms</string>
+    <string name="fg_notification_title">ARC mic is active</string>
+    <string name="fg_notification_text">ARC is listening continuously. Tap Mute / Mic OFF in ARC anytime to stop.</string>
+</resources>

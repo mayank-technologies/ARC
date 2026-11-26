@@ -1,0 +1,6 @@
+{
+  "name": "ARC",
+  "description": "Personal AI voice and device assistant with Gemini Live, voice commands, screen vision, routines, and anti-theft guard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
