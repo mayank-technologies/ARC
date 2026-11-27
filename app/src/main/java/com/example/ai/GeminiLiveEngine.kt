@@ -37,6 +37,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.math.abs
 import kotlin.math.sin
@@ -253,7 +254,9 @@ class GeminiLiveEngine(
     }
 
     /**
-     * Handles typed chat messages, manual-mic turns, or Tier-3 ElevenLabs turns.
+     * Handles typed chat messages and text+TTS turns.
+     * Always generates a visible text reply first (via onReplyReady) and then speaks it aloud
+     * when speakResponse is true, rather than dropping typed prompts into a live audio socket.
      */
     suspend fun sendTextTurn(
         rawMessage: String,
@@ -261,7 +264,8 @@ class GeminiLiveEngine(
         voiceGender: VoiceGender,
         maleVoicePreset: MaleVoicePreset = MaleVoicePreset.WARM_COMPANION,
         speakResponse: Boolean,
-        scope: CoroutineScope
+        scope: CoroutineScope,
+        onReplyReady: (suspend (String) -> Unit)? = null
     ): Result<String> {
         val trimmed = rawMessage.trim()
         if (trimmed.isBlank()) return Result.failure(IllegalArgumentException("Empty message"))
@@ -277,24 +281,15 @@ class GeminiLiveEngine(
         )
         val systemPrompt = ContextDetector.buildSystemPrompt(userName, memories)
 
-        // If a LiveSession is active, steer it directly via send()
-        val activeLive = liveSession
-        if (activeLive != null && speakResponse) {
-            return try {
-                activeLive.send(wrappedPrompt)
-                _voicePathStatus.value = VoicePathStatus.LIVE_HD
-                _engineState.value = VoiceEngineState.SPEAKING
-                Result.success("Sent to live voice session.")
-            } catch (e: Exception) {
-                Log.w(TAG, "LiveSession.send failed, falling back to text+ElevenLabs: ${e.message}")
-                runTextPlusFallbackTts(
-                    wrappedPrompt, systemPrompt, trimmed, voiceGender, maleVoicePreset, speakResponse, scope
-                )
-            }
-        }
-
         return runTextPlusFallbackTts(
-            wrappedPrompt, systemPrompt, trimmed, voiceGender, maleVoicePreset, speakResponse, scope
+            wrappedPrompt = wrappedPrompt,
+            systemPrompt = systemPrompt,
+            rawUserMessage = trimmed,
+            voiceGender = voiceGender,
+            maleVoicePreset = maleVoicePreset,
+            speakResponse = speakResponse,
+            scope = scope,
+            onReplyReady = onReplyReady
         )
     }
 
@@ -305,55 +300,91 @@ class GeminiLiveEngine(
         voiceGender: VoiceGender,
         maleVoicePreset: MaleVoicePreset,
         speakResponse: Boolean,
-        scope: CoroutineScope
+        scope: CoroutineScope,
+        onReplyReady: (suspend (String) -> Unit)? = null
     ): Result<String> {
         return try {
-            val response = withTimeout(60_000L) {
-                val model = Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
-                    modelName = "gemini-3.8-flash",
-                    systemInstruction = content { text(systemPrompt) },
-                    tools = toolRegistry.buildTools()
-                )
-                val chat = model.startChat()
-                var reply = chat.sendMessage(wrappedPrompt)
-                var hops = 0
-                while (reply.functionCalls.isNotEmpty() && hops < 4) {
-                    val toolResponses = reply.functionCalls.map { call ->
-                        toolRegistry.handleFunctionCall(call)
-                    }
-                    reply = chat.sendMessage(
-                        content("function") {
-                            toolResponses.forEach { part: FunctionResponsePart -> part(part) }
+            val primaryResult = runCatching {
+                withContext(Dispatchers.IO) {
+                    withTimeout(25_000L) {
+                        val model = Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
+                            modelName = "gemini-3.8-flash",
+                            systemInstruction = content { text(systemPrompt) },
+                            tools = toolRegistry.buildTools()
+                        )
+                        val chat = model.startChat()
+                        var reply = chat.sendMessage(wrappedPrompt)
+                        var hops = 0
+                        while (reply.functionCalls.isNotEmpty() && hops < 4) {
+                            val toolResponses = reply.functionCalls.map { call ->
+                                toolRegistry.handleFunctionCall(call)
+                            }
+                            reply = chat.sendMessage(
+                                content("function") {
+                                    toolResponses.forEach { part: FunctionResponsePart -> part(part) }
+                                }
+                            )
+                            hops++
                         }
-                    )
-                    hops++
+                        reply.text?.trim().orEmpty()
+                    }
                 }
-                reply.text?.trim().orEmpty()
             }
 
-            val finalReply = if (response.isNotBlank()) {
-                response
-            } else {
-                // Secondary Claude brain fallback
-                claudeClient.reason(rawUserMessage, systemPrompt).getOrNull()?.first
-                    ?: "I'm having trouble reaching the voice brain right now, $rawUserMessage."
+            primaryResult.exceptionOrNull()?.let { err ->
+                if (err is CancellationException) throw err
+                Log.w(TAG, "Primary gemini-3.8-flash turn failed (${err.message}); trying secondary brain.")
             }
+
+            val primaryText = primaryResult.getOrNull().orEmpty()
+            val finalReply = if (primaryText.isNotBlank()) {
+                primaryText
+            } else {
+                val fallbackRes = claudeClient.reason(rawUserMessage, systemPrompt)
+                fallbackRes.exceptionOrNull()?.let { err ->
+                    if (err is CancellationException) throw err
+                }
+                fallbackRes.getOrNull()?.first?.takeIf { it.isNotBlank() }
+                    ?: return run {
+                        val cause = primaryResult.exceptionOrNull()
+                            ?: fallbackRes.exceptionOrNull()
+                            ?: IllegalStateException("Unable to reach AI right now. Please check your connection.")
+                        _engineState.value = if (liveSession != null) VoiceEngineState.LISTENING else VoiceEngineState.ERROR
+                        Result.failure(cause)
+                    }
+            }
+
+            // Deliver reply to chat UI immediately before TTS audio playback starts
+            onReplyReady?.invoke(finalReply)
 
             if (speakResponse) {
+                val hadLive = liveSession != null
+                if (hadLive) {
+                    audioRouting.exitLiveVoiceMode()
+                }
                 _engineState.value = VoiceEngineState.SPEAKING
                 startWaveformVisualizer(scope)
-                fallbackTts.speak(finalReply, voiceGender, maleVoicePreset, scope)
-                _voicePathStatus.value = fallbackTts.voicePathStatus.value
-                _engineState.value = VoiceEngineState.IDLE
+                try {
+                    fallbackTts.speak(finalReply, voiceGender, maleVoicePreset, scope)
+                    _voicePathStatus.value = fallbackTts.voicePathStatus.value
+                } finally {
+                    if (liveSession != null) {
+                        audioRouting.enterLiveVoiceMode()
+                        _engineState.value = VoiceEngineState.LISTENING
+                    } else {
+                        _engineState.value = VoiceEngineState.IDLE
+                    }
+                }
             } else {
-                _engineState.value = VoiceEngineState.IDLE
+                _engineState.value = if (liveSession != null) VoiceEngineState.LISTENING else VoiceEngineState.IDLE
             }
             Result.success(finalReply)
         } catch (e: CancellationException) {
+            _engineState.value = if (liveSession != null) VoiceEngineState.LISTENING else VoiceEngineState.IDLE
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Text/Fallback turn failed", e)
-            _engineState.value = VoiceEngineState.ERROR
+            _engineState.value = if (liveSession != null) VoiceEngineState.LISTENING else VoiceEngineState.ERROR
             Result.failure(e)
         }
     }

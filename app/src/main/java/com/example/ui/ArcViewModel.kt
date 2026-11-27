@@ -42,8 +42,10 @@ import com.example.device.DeviceActionExecutor
 import com.example.service.ArcForegroundService
 import com.example.service.ReminderScheduler
 import com.example.service.ServiceEvent
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -51,7 +53,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -172,10 +176,23 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
     private val _statusToast = MutableStateFlow<String?>(null)
     val statusToast = _statusToast.asStateFlow()
 
+    private val _isChatThinking = MutableStateFlow(false)
+    val isChatThinking = _isChatThinking.asStateFlow()
+
+    private val _chatError = MutableStateFlow<String?>(null)
+    val chatError = _chatError.asStateFlow()
+
     private var fgService: ArcForegroundService? = null
     private var serviceBound = false
     private var liveSessionJob: Job? = null
+    private var onlineRoutineJob: Job? = null
+    private var textTurnJob: Job? = null
     private var initialRestoreHandled = false
+
+    @Volatile
+    private var onlineTarget: Boolean? = null
+
+    private fun isCurrentlyOnline(): Boolean = onlineTarget ?: settings.value.isOnline
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -272,7 +289,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
 
                 repository.addMessage("ARC", alert.message, "FACTUAL")
                 _statusToast.value = alert.message
-                if (st.isOnline) {
+                if (isCurrentlyOnline()) {
                     fallbackTts.speak(alert.message, st.voiceGender, st.maleVoicePreset, viewModelScope)
                 }
             }
@@ -351,6 +368,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
+                onlineTarget = true
                 prefs.setMicMuted(false)
                 prefs.setOnline(true)
                 ensureForegroundServiceBound()
@@ -388,133 +406,206 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun clearChatError() {
+        _chatError.value = null
+    }
+
     fun sendTextCommand(rawText: String, speakReply: Boolean = true) {
         val text = rawText.trim()
         if (text.isBlank()) return
-        viewModelScope.launch {
+
+        textTurnJob?.cancel()
+        _chatError.value = null
+
+        textTurnJob = viewModelScope.launch {
             val contextTag = ContextDetector.detectContext(text).name
             repository.addMessage("USER", text, contextTag)
 
             val lower = text.lowercase()
             if (lower.contains("good morning arc")) {
+                _isChatThinking.value = false
                 updateOnlineState(true, speakRoutine = true)
                 return@launch
             }
             if (lower.contains("good night arc")) {
-                updateOnlineState(false, speakRoutine = true)
+                _isChatThinking.value = false
+                updateOnlineState(false, speakRoutine = false)
                 return@launch
             }
             if (lower.contains("security on") || lower.contains("arm security")) {
+                _isChatThinking.value = false
                 setAntiTheftArmed(true)
                 val msg = "Security Guard armed. Moving or unplugging the phone will trigger the siren."
                 repository.addMessage("ARC", msg, "FACTUAL")
                 if (speakReply) {
                     val st = settings.value
-                    fallbackTts.speak(msg, st.voiceGender, st.maleVoicePreset, viewModelScope)
+                    fallbackTts.speak(msg, st.voiceGender, st.maleVoicePreset, this)
                 }
                 return@launch
             }
             if (lower.contains("security off") || lower.contains("disarm security")) {
+                _isChatThinking.value = false
                 setAntiTheftArmed(false)
                 val msg = "Security Guard disarmed."
                 repository.addMessage("ARC", msg, "FACTUAL")
                 if (speakReply) {
                     val st = settings.value
-                    fallbackTts.speak(msg, st.voiceGender, st.maleVoicePreset, viewModelScope)
+                    fallbackTts.speak(msg, st.voiceGender, st.maleVoicePreset, this)
                 }
                 return@launch
             }
 
             val st = settings.value
-            // If user explicitly requests a heavy download/streaming action while on mobile data, proactively warn
             val heavyKeywords = listOf("download", "large file", "movie", "video", "youtube", "update app", "hd stream")
             if (st.proactiveAlertsEnabled && heavyKeywords.any { lower.contains(it) }) {
                 ProactiveAlertMonitor.checkDataSaverForHeavyAction(appContext, "data-heavy task")?.let { warn ->
                     _statusToast.value = warn
                     repository.addMessage("ARC", warn, "FACTUAL")
                     if (speakReply) {
-                        fallbackTts.speak(warn, st.voiceGender, st.maleVoicePreset, viewModelScope)
+                        fallbackTts.speak(warn, st.voiceGender, st.maleVoicePreset, this)
                     }
                 }
             }
 
-            val result = liveEngine.sendTextTurn(
-                rawMessage = text,
-                userName = st.userName.ifBlank { "Friend" },
-                voiceGender = st.voiceGender,
-                maleVoicePreset = st.maleVoicePreset,
-                speakResponse = speakReply,
-                scope = viewModelScope
-            )
-            result.fold(
-                onSuccess = { reply ->
-                    if (reply != "Sent to live voice session.") {
-                        repository.addMessage("ARC", reply, contextTag)
+            _isChatThinking.value = true
+            try {
+                var replyInserted = false
+                val result = liveEngine.sendTextTurn(
+                    rawMessage = text,
+                    userName = st.userName.ifBlank { "Friend" },
+                    voiceGender = st.voiceGender,
+                    maleVoicePreset = st.maleVoicePreset,
+                    speakResponse = speakReply,
+                    scope = this,
+                    onReplyReady = { reply ->
+                        if (!replyInserted) {
+                            replyInserted = true
+                            _isChatThinking.value = false
+                            repository.addMessage("ARC", reply, contextTag)
+                        }
                     }
-                },
-                onFailure = { err ->
-                    val fallbackMsg = "I ran into an issue: ${err.localizedMessage ?: "connection error"}"
-                    repository.addMessage("ARC", fallbackMsg, "EMPATHETIC")
-                    _statusToast.value = err.localizedMessage
-                }
-            )
+                )
+                result.fold(
+                    onSuccess = { reply ->
+                        _isChatThinking.value = false
+                        if (!replyInserted) {
+                            repository.addMessage("ARC", reply, contextTag)
+                        }
+                    },
+                    onFailure = { err ->
+                        _isChatThinking.value = false
+                        val errText = err.localizedMessage?.takeIf { it.isNotBlank() } ?: "Connection error"
+                        _chatError.value = errText
+                        val fallbackMsg = "Sorry, I couldn't respond right now ($errText)."
+                        repository.addMessage("ARC", fallbackMsg, "EMPATHETIC")
+                        _statusToast.value = errText
+                        if (speakReply) {
+                            fallbackTts.speak("Sorry, I couldn't connect right now.", st.voiceGender, st.maleVoicePreset, this)
+                        }
+                    }
+                )
+            } catch (e: CancellationException) {
+                _isChatThinking.value = false
+                throw e
+            }
         }
     }
 
     /**
-     * Good Morning / Good Night routine control.
-     * CHANGE: "Good Night ARC" (online = false) now automatically sets Mic OFF/MUTED,
-     * closes any active Gemini Live session, and halts all background listening.
+     * Power ON/OFF & Good Morning / Standby control.
+     * - ON: Speaks greeting immediately, fetches weather/news/tasks concurrently with tight timeouts,
+     *       and delivers the briefing right after the greeting.
+     * - OFF: Instant silence kill-switch — cancels all active routines/chat/live tasks and halts
+     *        TTS + microphone immediately with ZERO goodbye speech.
      */
     fun updateOnlineState(online: Boolean, speakRoutine: Boolean = true) {
-        viewModelScope.launch {
-            prefs.setOnline(online)
-            val st = settings.value
-            val name = st.userName.ifBlank { "Friend" }
-            if (online) {
-                if (speakRoutine) {
-                    val now = LocalTime.now()
-                    val greeting = ContextDetector.timeOfDayGreeting(now)
-                    val w = externalApis.fetchWeather().fold(
-                        onSuccess = {
-                            _weather.value = it
-                            "${it.temperatureC.toInt()}°C and ${it.condition} in ${it.city}"
-                        },
-                        onFailure = { "weather unavailable right now" }
-                    )
-                    val news = externalApis.fetchTopNews("india", 2).fold(
-                        onSuccess = { list ->
-                            if (list.isEmpty()) "no breaking headlines"
-                            else list.joinToString(". ") { it.title }
-                        },
-                        onFailure = { "news briefing unavailable without NEWS_API_KEY" }
-                    )
-                    val tasks = repository.getEnabledReminders()
-                    val taskSummary = if (tasks.isEmpty()) {
-                        "you have no tasks today"
-                    } else {
-                        "you have ${tasks.size} task${if (tasks.size > 1) "s" else ""}: ${tasks.take(3).joinToString(", ") { it.title }}"
-                    }
-                    val clockStr = now.format(DateTimeFormatter.ofPattern("h:mm a"))
-                    val displayBriefing = "$greeting, $name — ARC online. It is $clockStr. Today's weather is $w. " +
-                        "Top local news: $news. And for your schedule, $taskSummary."
-                    // Spoken string uses "Arc" (auto-converted to "आर्क" in Hindi context by ContextDetector)
-                    val spokenBriefing = "$greeting, $name — Arc online. It is $clockStr. Today's weather is $w. " +
-                        "Top local news: $news. And for your schedule, $taskSummary."
-                    repository.addMessage("ARC", displayBriefing, "GREETING")
-                    fallbackTts.speak(spokenBriefing, st.voiceGender, st.maleVoicePreset, viewModelScope)
-                }
-            } else {
-                // Good Night routine: automatically turn Mic OFF/MUTED and stop live listening
-                setMicActive(false)
-                if (speakRoutine) {
-                    val displayBye = "Good night, $name. Mic is muted and ARC is in standby mode — tap the mic button whenever you want to talk again."
-                    // Keep Latin "ARC" in UI chat history, pass single-word "Arc" to TTS so letters A-R-C are never spelled
-                    val spokenBye = "Good night, $name. Mic is muted and Arc is in standby mode — tap the mic button whenever you want to talk again."
-                    repository.addMessage("ARC", displayBye, "GREETING")
-                    fallbackTts.speak(spokenBye, st.voiceGender, st.maleVoicePreset, viewModelScope)
+        onlineTarget = online
+        onlineRoutineJob?.cancel()
+        onlineRoutineJob = null
+
+        if (!online) {
+            textTurnJob?.cancel()
+            textTurnJob = null
+            _isChatThinking.value = false
+            liveSessionJob?.cancel()
+            liveSessionJob = null
+            fallbackTts.stop()
+
+            onlineRoutineJob = viewModelScope.launch {
+                prefs.setOnline(false)
+                prefs.setMicMuted(true)
+                liveEngine.stopLiveSession()
+                fallbackTts.stop()
+                fgService?.updateMicActive(false)
+                if (serviceBound && !settings.value.antiTheftArmed && !_isScreenSharing.value) {
+                    runCatching { appContext.unbindService(serviceConnection) }
+                    serviceBound = false
+                    fgService = null
                 }
             }
+            return
+        }
+
+        onlineRoutineJob = viewModelScope.launch {
+            prefs.setOnline(true)
+            val st = settings.value
+            val name = st.userName.ifBlank { "Friend" }
+            if (!speakRoutine) return@launch
+
+            val now = LocalTime.now()
+            val greeting = ContextDetector.timeOfDayOnlineGreeting(now)
+
+            // Fetch weather, news (NEWS_API_KEY gated), and tasks concurrently while Hinglish greeting speaks immediately
+            val weatherDeferred = async(Dispatchers.IO) {
+                withTimeoutOrNull(3800L) {
+                    externalApis.fetchWeather().getOrNull()
+                }?.also { _weather.value = it } ?: _weather.value
+            }
+            val newsDeferred = async(Dispatchers.IO) {
+                withTimeoutOrNull(2800L) {
+                    externalApis.fetchTopNews("india", 2).getOrNull()
+                }
+            }
+            val tasksDeferred = async(Dispatchers.IO) {
+                repository.getEnabledReminders()
+            }
+
+            val displayGreeting = "$greeting $name, main ARC online hoon."
+            val spokenGreeting = "$greeting $name, main आर्क online hoon."
+            repository.addMessage("ARC", displayGreeting, "GREETING")
+            if (!isActive || !isCurrentlyOnline()) return@launch
+            fallbackTts.speak(spokenGreeting, st.voiceGender, st.maleVoicePreset, this)
+
+            val newsList = newsDeferred.await().orEmpty()
+            val weatherSnap = weatherDeferred.await()
+            val tasks = tasksDeferred.await()
+
+            // Abort immediately if user switched ARC OFF while greeting/fetches ran
+            if (!isActive || !isCurrentlyOnline()) return@launch
+
+            val newsPart = if (newsList.isNotEmpty()) {
+                "Aaj ki taaza khabar hai: ${newsList.joinToString(". ") { it.title }}. "
+            } else {
+                ""
+            }
+
+            val clockStr = LocalTime.now().format(DateTimeFormatter.ofPattern("h:mm a"))
+            val weatherPart = if (weatherSnap != null) {
+                "Abhi samay $clockStr hai aur ${weatherSnap.city} ka mausam ${weatherSnap.temperatureC.toInt()} degree aur ${weatherSnap.condition} hai."
+            } else {
+                "Abhi samay $clockStr hai, lekin mausam ki jaankari abhi uplabdh nahi hai."
+            }
+
+            val taskPart = if (tasks.isNotEmpty()) {
+                " Aaj aapke ${tasks.size} task scheduled hain: ${tasks.take(3).joinToString(", ") { it.title }}."
+            } else {
+                ""
+            }
+
+            val briefingText = "$newsPart$weatherPart$taskPart".trim()
+            repository.addMessage("ARC", briefingText, "FACTUAL")
+            if (!isActive || !isCurrentlyOnline()) return@launch
+            fallbackTts.speak(briefingText, st.voiceGender, st.maleVoicePreset, this)
         }
     }
 

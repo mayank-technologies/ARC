@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -71,6 +72,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -121,7 +123,6 @@ import com.example.ai.VoiceEngineState
 import com.example.ui.ArcViewModel
 import com.example.ui.components.ArcBackgroundGrid
 import com.example.ui.components.ArcCoreSphere
-import com.example.ui.components.ArcWaveform
 import com.example.ui.theme.ArcAlertCrimson
 import com.example.ui.theme.ArcCyan
 import com.example.ui.theme.ArcGlassBorder
@@ -155,10 +156,11 @@ fun HomeScreen(
     val speechEnergy by viewModel.speechEnergy.collectAsStateWithLifecycle()
     val voicePathStatus by viewModel.voicePathStatus.collectAsStateWithLifecycle()
     val ttsDiagnostic by viewModel.ttsDiagnostic.collectAsStateWithLifecycle()
-    val waveformBars by viewModel.waveformBars.collectAsStateWithLifecycle()
     val weather by viewModel.weather.collectAsStateWithLifecycle()
     val reminders by viewModel.reminders.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
+    val isChatThinking by viewModel.isChatThinking.collectAsStateWithLifecycle()
+    val chatError by viewModel.chatError.collectAsStateWithLifecycle()
     val liveTime by viewModel.liveTime.collectAsStateWithLifecycle()
     val antiTheftAlert by viewModel.antiTheftAlert.collectAsStateWithLifecycle()
     val captureFrontPhoto by viewModel.requestFrontPhotoCapture.collectAsStateWithLifecycle()
@@ -224,11 +226,6 @@ fun HomeScreen(
             }
         }
     }
-
-    val showWaveform = voiceState == VoiceEngineState.LISTENING ||
-        voiceState == VoiceEngineState.SPEAKING ||
-        voiceState == VoiceEngineState.CONNECTING ||
-        voiceState == VoiceEngineState.PROCESSING
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -520,21 +517,7 @@ fun HomeScreen(
                             .testTag("arc_core_sphere")
                     )
 
-                    // Subtle live amplitude waveform when voice session is active
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(36.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        ArcWaveform(
-                            bars = waveformBars,
-                            visible = showWaveform,
-                            isSpeaking = voiceState == VoiceEngineState.SPEAKING
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     // Restored sleek Power ON/OFF (ONLINE / STANDBY) toggle pill directly below the CORE sphere
                     Surface(
@@ -816,6 +799,14 @@ fun HomeScreen(
             containerColor = ArcSurface,
             contentColor = ArcTextPrimary
         ) {
+            val recent = messages.takeLast(20)
+            val chatListState = rememberLazyListState()
+            LaunchedEffect(recent.size, isChatThinking) {
+                if (recent.isNotEmpty()) {
+                    chatListState.animateScrollToItem(recent.lastIndex)
+                }
+            }
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -823,28 +814,101 @@ fun HomeScreen(
                     .padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Message ARC", style = MaterialTheme.typography.titleLarge, color = ArcCyan)
-
-                val recent = messages.takeLast(6)
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(recent, key = { it.id }) { msg ->
-                        val isUser = msg.role == "USER"
+                    Text("Message ARC", style = MaterialTheme.typography.titleLarge, color = ArcCyan)
+                    AnimatedVisibility(visible = isChatThinking || voiceState == VoiceEngineState.SPEAKING) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = ArcCyan
+                            )
+                            Text(
+                                text = if (isChatThinking) "ARC is thinking..." else "ARC is speaking...",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = ArcCyan
+                            )
+                        }
+                    }
+                }
+
+                AnimatedVisibility(visible = chatError != null) {
+                    chatError?.let { err ->
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (isUser) ArcIonBlue.copy(alpha = 0.2f) else ArcSurfaceElevated,
+                            color = ArcAlertCrimson.copy(alpha = 0.16f),
+                            border = BorderStroke(1.dp, ArcAlertCrimson.copy(alpha = 0.6f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = "${if (isUser) "You" else "ARC"}: ${msg.text}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = ArcTextPrimary,
-                                modifier = Modifier.padding(10.dp)
-                            )
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = err,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ArcTextPrimary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = { viewModel.clearChatError() },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Dismiss error",
+                                        tint = ArcAlertCrimson,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (recent.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Say \"hlo\" or ask ARC anything — replies will appear here and speak aloud.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ArcTextMuted
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        state = chatListState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(recent, key = { it.id }) { msg ->
+                            val isUser = msg.role == "USER"
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isUser) ArcIonBlue.copy(alpha = 0.2f) else ArcSurfaceElevated,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "${if (isUser) "You" else "ARC"}: ${msg.text}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = ArcTextPrimary,
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -862,8 +926,9 @@ fun HomeScreen(
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                         keyboardActions = KeyboardActions(
                             onSend = {
-                                if (chatInput.isNotBlank()) {
-                                    viewModel.sendTextCommand(chatInput, speakReply = true)
+                                val trimmed = chatInput.trim()
+                                if (trimmed.isNotBlank()) {
+                                    viewModel.sendTextCommand(trimmed, speakReply = true)
                                     chatInput = ""
                                 }
                             }
@@ -880,8 +945,9 @@ fun HomeScreen(
                     )
                     IconButton(
                         onClick = {
-                            if (chatInput.isNotBlank()) {
-                                viewModel.sendTextCommand(chatInput, speakReply = true)
+                            val trimmed = chatInput.trim()
+                            if (trimmed.isNotBlank()) {
+                                viewModel.sendTextCommand(trimmed, speakReply = true)
                                 chatInput = ""
                             }
                         },

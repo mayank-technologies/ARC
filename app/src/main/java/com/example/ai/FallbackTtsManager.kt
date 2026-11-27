@@ -199,6 +199,9 @@ class FallbackTtsManager(
                     start()
                 }
                 mediaPlayer = mp
+                cont.invokeOnCancellation {
+                    stop()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "MediaPlayer failure", e)
                 _isSpeaking.value = false
@@ -211,6 +214,11 @@ class FallbackTtsManager(
 
     private suspend fun speakWithAndroidTts(text: String, gender: VoiceGender, scope: CoroutineScope) {
         val tts = androidTts ?: return
+        var waitedMs = 0L
+        while (!ttsReady && waitedMs < 2500L) {
+            delay(50L)
+            waitedMs += 50L
+        }
         if (!ttsReady) return
 
         withContext(Dispatchers.Main) {
@@ -277,6 +285,9 @@ class FallbackTtsManager(
                     }
                 })
                 tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                cont.invokeOnCancellation {
+                    stop()
+                }
             }
         }
     }

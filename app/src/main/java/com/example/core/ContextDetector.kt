@@ -117,8 +117,9 @@ $memorySection
         val lower = text.lowercase()
         val hinglishMarkers = listOf(
             "namaste", "subah", "raat", "shuru", "gayi", "gaya", "hain", "hai", "hoon", "ho",
-            "karo", "bhejo", "padho", "lagaiye", "aap", "aapka", "main", "mera", "mere", "neeche",
-            "chahiye", "chahenge", "sunta", "bolna", "kaise", "kya", "bhai", "dost", "band"
+            "karo", "bhejo", "padho", "lagaiye", "aap", "aapka", "aapke", "main", "mera", "mere", "neeche",
+            "chahiye", "chahenge", "sunta", "bolna", "kaise", "kya", "bhai", "dost", "band",
+            "aaj", "mausam", "khabar", "taaza", "abhi", "samay", "aur", "ka", "ki", "ko", "nahi"
         )
         return hinglishMarkers.any { token ->
             Regex("\\b$token\\b").containsMatchIn(lower)
@@ -191,6 +192,15 @@ $memorySection
             now.hour in 12..16 -> "Good afternoon"
             now.hour in 17..20 -> "Good evening"
             else -> "Good night"
+        }
+    }
+
+    fun timeOfDayOnlineGreeting(now: LocalTime = LocalTime.now()): String {
+        return when {
+            now.hour in 4..11 -> "Good morning"
+            now.hour in 12..16 -> "Good afternoon"
+            now.hour in 17..21 -> "Good evening"
+            else -> "Namaste"
         }
     }
 }

@@ -81,12 +81,16 @@ data class ResolvedLocation(
 class ExternalApis(private val context: Context) {
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
         .build()
 
+    @Volatile
+    private var cachedLocation: ResolvedLocation? = null
+
     /**
-     * Resolves live GPS + Geocoder address; falls back only when permission is denied or GPS unavailable.
+     * Resolves live GPS + Geocoder address quickly; uses lastLocation first and bounds
+     * fresh GPS + geocoding with tight timeouts so startup briefings never stall.
      */
     @SuppressLint("MissingPermission")
     suspend fun resolveLiveLocation(): ResolvedLocation = withContext(Dispatchers.IO) {
@@ -108,28 +112,26 @@ class ExternalApis(private val context: Context) {
         }
 
         val fused = LocationServices.getFusedLocationProviderClient(context)
-        val location = suspendCancellableCoroutine { cont ->
-            val cts = CancellationTokenSource()
-            fused.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, cts.token)
-                .addOnSuccessListener { loc ->
-                    if (loc != null) {
-                        cont.resume(loc)
-                    } else {
-                        fused.lastLocation
-                            .addOnSuccessListener { last -> cont.resume(last) }
-                            .addOnFailureListener { cont.resume(null) }
-                    }
-                }
-                .addOnFailureListener {
-                    fused.lastLocation
-                        .addOnSuccessListener { last -> cont.resume(last) }
-                        .addOnFailureListener { cont.resume(null) }
-                }
-            cont.invokeOnCancellation { cts.cancel() }
+        val lastKnown = kotlinx.coroutines.withTimeoutOrNull(600L) {
+            suspendCancellableCoroutine { cont ->
+                fused.lastLocation
+                    .addOnSuccessListener { loc -> if (cont.isActive) cont.resume(loc) }
+                    .addOnFailureListener { if (cont.isActive) cont.resume(null) }
+            }
+        }
+
+        val location = lastKnown ?: kotlinx.coroutines.withTimeoutOrNull(1800L) {
+            suspendCancellableCoroutine { cont ->
+                val cts = CancellationTokenSource()
+                fused.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, cts.token)
+                    .addOnSuccessListener { loc -> if (cont.isActive) cont.resume(loc) }
+                    .addOnFailureListener { if (cont.isActive) cont.resume(null) }
+                cont.invokeOnCancellation { cts.cancel() }
+            }
         }
 
         if (location == null) {
-            return@withContext ResolvedLocation(
+            return@withContext cachedLocation ?: ResolvedLocation(
                 latitude = 28.6139,
                 longitude = 77.2090,
                 city = "Location Unavailable",
@@ -138,14 +140,17 @@ class ExternalApis(private val context: Context) {
             )
         }
 
-        val (city, address) = reverseGeocode(location.latitude, location.longitude)
+        val (city, address) = kotlinx.coroutines.withTimeoutOrNull(1200L) {
+            reverseGeocode(location.latitude, location.longitude)
+        } ?: ("Local Area" to "${location.latitude}, ${location.longitude}")
+
         ResolvedLocation(
             latitude = location.latitude,
             longitude = location.longitude,
             city = city,
             fullAddress = address,
             isFallback = false
-        )
+        ).also { cachedLocation = it }
     }
 
     @Suppress("DEPRECATION")
@@ -157,7 +162,7 @@ class ExternalApis(private val context: Context) {
                 val results = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     suspendCancellableCoroutine { cont ->
                         geocoder.getFromLocation(lat, lon, 1) { list ->
-                            cont.resume(list)
+                            if (cont.isActive) cont.resume(list)
                         }
                     }
                 } else {
