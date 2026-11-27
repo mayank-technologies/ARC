@@ -13,21 +13,9 @@ import kotlinx.coroutines.flow.map
 
 private val Context.arcDataStore: DataStore<Preferences> by preferencesDataStore(name = "arc_prefs")
 
-enum class VoiceGender(val geminiVoiceName: String, val elevenLabsVoiceId: String, val label: String) {
-    MALE(
-        geminiVoiceName = "Orus",
-        elevenLabsVoiceId = "nPczCjzI2devNBz1zQrb", // Brian: deep, warm, comforting human male
-        label = "Male"
-    ),
-    FEMALE(
-        geminiVoiceName = "Sulafat",
-        elevenLabsVoiceId = "EXAVITQu4vr4xnSDxMaL", // Soft warm female fallback
-        label = "Female (Sulafat)"
-    )
-}
-
 /**
- * Curated deep, warm male human voice presets paired across Gemini Live and ElevenLabs HD.
+ * Curated deep, warm male human voice presets paired across Gemini Live,
+ * Gemini 3.1 Flash TTS, and ElevenLabs HD. Female voice options have been permanently removed.
  */
 enum class MaleVoicePreset(
     val geminiVoiceName: String,
@@ -56,10 +44,11 @@ enum class MaleVoicePreset(
 }
 
 enum class VoicePathStatus(val label: String) {
-    IDLE("Voice Ready"),
-    LIVE_HD("Gemini Live HD • Wideband"),
-    ELEVENLABS_HD("ElevenLabs HD • 44.1kHz"),
-    DEVICE_TTS_FALLBACK("Device TTS Fallback")
+    IDLE("Male Voice Ready"),
+    LIVE_HD("Gemini Live HD • Male"),
+    GEMINI_TTS_MALE("Gemini Flash TTS • Male"),
+    ELEVENLABS_HD("ElevenLabs HD • Male"),
+    DEVICE_TTS_FALLBACK("Device TTS Male Fallback")
 }
 
 data class PersonalInfo(
@@ -72,6 +61,7 @@ data class PersonalInfo(
 
 /**
  * Persisted ARC user & assistant settings.
+ * - Male-only JARVIS voice presets (female voice permanently removed).
  * - Removed wakeWordEnabled completely (manual mic-toggle controls listening instead).
  * - isMicMuted defaults to true on fresh install so ARC never records until user taps Mic ON;
  *   once toggled, the state persists across app restarts until changed or Good Night ARC runs.
@@ -80,8 +70,7 @@ data class ArcSettingsState(
     val userName: String = "",
     val onboardingCompleted: Boolean = false,
     val permissionsReviewed: Boolean = false,
-    val voiceGender: VoiceGender = VoiceGender.MALE,
-    val maleVoicePreset: MaleVoicePreset = MaleVoicePreset.WARM_COMPANION,
+    val maleVoicePreset: MaleVoicePreset = MaleVoicePreset.BRITISH_JARVIS,
     val isMicMuted: Boolean = true,
     val isOnline: Boolean = true,
     val antiTheftArmed: Boolean = false,
@@ -96,14 +85,11 @@ data class ArcSettingsState(
         "com.instagram.android"
     )
 ) {
-    fun activeGeminiVoiceName(): String =
-        if (voiceGender == VoiceGender.MALE) maleVoicePreset.geminiVoiceName else voiceGender.geminiVoiceName
+    fun activeGeminiVoiceName(): String = maleVoicePreset.geminiVoiceName
 
-    fun activeElevenLabsVoiceId(): String =
-        if (voiceGender == VoiceGender.MALE) maleVoicePreset.elevenLabsVoiceId else voiceGender.elevenLabsVoiceId
+    fun activeElevenLabsVoiceId(): String = maleVoicePreset.elevenLabsVoiceId
 
-    fun activeVoiceDisplayLabel(): String =
-        if (voiceGender == VoiceGender.MALE) "Male • ${maleVoicePreset.label}" else voiceGender.label
+    fun activeVoiceDisplayLabel(): String = "Male • ${maleVoicePreset.label}"
 }
 
 class ArcPreferences(private val context: Context) {
@@ -128,15 +114,12 @@ class ArcPreferences(private val context: Context) {
     }
 
     val settingsFlow: Flow<ArcSettingsState> = context.arcDataStore.data.map { prefs ->
-        val genderStr = prefs[Keys.VOICE_GENDER] ?: VoiceGender.MALE.name
-        val gender = runCatching { VoiceGender.valueOf(genderStr) }.getOrDefault(VoiceGender.MALE)
-        val presetStr = prefs[Keys.MALE_VOICE_PRESET] ?: MaleVoicePreset.WARM_COMPANION.name
-        val preset = runCatching { MaleVoicePreset.valueOf(presetStr) }.getOrDefault(MaleVoicePreset.WARM_COMPANION)
+        val presetStr = prefs[Keys.MALE_VOICE_PRESET] ?: MaleVoicePreset.BRITISH_JARVIS.name
+        val preset = runCatching { MaleVoicePreset.valueOf(presetStr) }.getOrDefault(MaleVoicePreset.BRITISH_JARVIS)
         ArcSettingsState(
             userName = prefs[Keys.USER_NAME] ?: "",
             onboardingCompleted = prefs[Keys.ONBOARDING_COMPLETED] ?: false,
             permissionsReviewed = prefs[Keys.PERMISSIONS_REVIEWED] ?: false,
-            voiceGender = gender,
             maleVoicePreset = preset,
             // Default to muted (OFF) until user explicitly taps Mic ON; persisted afterward
             isMicMuted = prefs[Keys.MIC_MUTED] ?: true,
@@ -174,12 +157,11 @@ class ArcPreferences(private val context: Context) {
         context.arcDataStore.edit { it[Keys.PERMISSIONS_REVIEWED] = reviewed }
     }
 
-    suspend fun setVoiceGender(gender: VoiceGender) {
-        context.arcDataStore.edit { it[Keys.VOICE_GENDER] = gender.name }
-    }
-
     suspend fun setMaleVoicePreset(preset: MaleVoicePreset) {
-        context.arcDataStore.edit { it[Keys.MALE_VOICE_PRESET] = preset.name }
+        context.arcDataStore.edit {
+            it[Keys.VOICE_GENDER] = "MALE"
+            it[Keys.MALE_VOICE_PRESET] = preset.name
+        }
     }
 
     suspend fun setMicMuted(muted: Boolean) {

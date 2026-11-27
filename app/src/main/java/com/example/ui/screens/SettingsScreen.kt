@@ -89,7 +89,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.data.prefs.MaleVoicePreset
 import com.example.data.prefs.PersonalInfo
-import com.example.data.prefs.VoiceGender
 import com.example.data.prefs.VoicePathStatus
 import com.example.service.ArcAccessibilityService
 import com.example.service.ArcDeviceAdminReceiver
@@ -197,89 +196,66 @@ fun SettingsScreen(
                         val k = BuildConfig.ELEVENLABS_API_KEY.trim()
                         k.isNotBlank() && !k.startsWith("MY_")
                     }
-                    SettingsSectionCard(icon = Icons.Default.RecordVoiceOver, title = "Voice & Cadence") {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = settings.activeVoiceDisplayLabel(),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = ArcTextPrimary
-                                )
-                                Text(
-                                    text = "Wideband speaker/headset audio routing, natural breath pauses & ElevenLabs 44.1kHz HD synthesis.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = ArcTextSecondary
-                                )
-                            }
-                            Switch(
-                                checked = settings.voiceGender == VoiceGender.FEMALE,
-                                onCheckedChange = { isFemale ->
-                                    viewModel.setVoiceGender(if (isFemale) VoiceGender.FEMALE else VoiceGender.MALE)
-                                },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = ArcVoid,
-                                    checkedTrackColor = ArcCyan,
-                                    uncheckedThumbColor = ArcCyan,
-                                    uncheckedTrackColor = ArcSurfaceElevated
-                                ),
-                                modifier = Modifier.testTag("voice_gender_switch")
-                            )
-                        }
+                    SettingsSectionCard(icon = Icons.Default.RecordVoiceOver, title = "Voice & Cadence (Male Only)") {
+                        Text(
+                            text = settings.activeVoiceDisplayLabel(),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = ArcTextPrimary
+                        )
+                        Text(
+                            text = "Pure male JARVIS voices powered by Gemini Live, Gemini 3.1 Flash TTS Male, and ElevenLabs HD.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ArcTextSecondary
+                        )
 
-                        AnimatedVisibility(visible = settings.voiceGender == VoiceGender.MALE) {
-                            Column(
-                                modifier = Modifier.padding(top = 12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = "Deep Male JARVIS Character",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = ArcCyan
-                                )
-                                MaleVoicePreset.entries.forEach { preset ->
-                                    val selected = settings.maleVoicePreset == preset
-                                    Surface(
-                                        onClick = { viewModel.setMaleVoicePreset(preset) },
-                                        shape = RoundedCornerShape(14.dp),
-                                        color = if (selected) ArcCyan.copy(alpha = 0.14f) else ArcSurfaceElevated,
-                                        border = BorderStroke(
-                                            1.dp,
-                                            if (selected) ArcCyan else ArcGlassBorder
-                                        ),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(min = 52.dp)
-                                            .testTag("male_preset_${preset.name.lowercase()}")
+                        Column(
+                            modifier = Modifier.padding(top = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Select Male JARVIS Character",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = ArcCyan
+                            )
+                            MaleVoicePreset.entries.forEach { preset ->
+                                val selected = settings.maleVoicePreset == preset
+                                Surface(
+                                    onClick = { viewModel.setMaleVoicePreset(preset) },
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = if (selected) ArcCyan.copy(alpha = 0.14f) else ArcSurfaceElevated,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (selected) ArcCyan else ArcGlassBorder
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 52.dp)
+                                        .testTag("male_preset_${preset.name.lowercase()}")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = preset.label,
-                                                    style = MaterialTheme.typography.titleSmall,
-                                                    color = if (selected) ArcCyan else ArcTextPrimary
-                                                )
-                                                Text(
-                                                    text = preset.subtitle,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = ArcTextSecondary
-                                                )
-                                            }
-                                            if (selected) {
-                                                Icon(
-                                                    imageVector = Icons.Default.CheckCircle,
-                                                    contentDescription = "Selected",
-                                                    tint = ArcCyan,
-                                                    modifier = Modifier.size(20.dp)
-                                                )
-                                            }
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = preset.label,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = if (selected) ArcCyan else ArcTextPrimary
+                                            )
+                                            Text(
+                                                text = preset.subtitle,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = ArcTextSecondary
+                                            )
+                                        }
+                                        if (selected) {
+                                            Icon(
+                                                imageVector = Icons.Default.CheckCircle,
+                                                contentDescription = "Selected",
+                                                tint = ArcCyan,
+                                                modifier = Modifier.size(20.dp)
+                                            )
                                         }
                                     }
                                 }
@@ -287,12 +263,16 @@ fun SettingsScreen(
                         }
 
                         Spacer(Modifier.height(12.dp))
+                        val isCloudVoiceReady = elevenConfigured ||
+                            voicePathStatus == VoicePathStatus.LIVE_HD ||
+                            voicePathStatus == VoicePathStatus.GEMINI_TTS_MALE ||
+                            voicePathStatus == VoicePathStatus.IDLE
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (elevenConfigured) ArcTeal.copy(alpha = 0.10f) else ArcStandbyAmber.copy(alpha = 0.12f),
+                            color = if (isCloudVoiceReady) ArcTeal.copy(alpha = 0.10f) else ArcStandbyAmber.copy(alpha = 0.12f),
                             border = BorderStroke(
                                 1.dp,
-                                if (elevenConfigured) ArcTeal.copy(alpha = 0.4f) else ArcStandbyAmber.copy(alpha = 0.45f)
+                                if (isCloudVoiceReady) ArcTeal.copy(alpha = 0.4f) else ArcStandbyAmber.copy(alpha = 0.45f)
                             ),
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -304,17 +284,24 @@ fun SettingsScreen(
                                 Icon(
                                     imageVector = Icons.Default.GraphicEq,
                                     contentDescription = null,
-                                    tint = if (elevenConfigured) ArcTeal else ArcStandbyAmber
+                                    tint = if (isCloudVoiceReady) ArcTeal else ArcStandbyAmber
                                 )
                                 Column {
                                     Text(
                                         text = when {
-                                            voicePathStatus == VoicePathStatus.LIVE_HD -> "Active Path: Gemini Live HD (Wideband)"
-                                            elevenConfigured -> "Text & Vision Voice: ElevenLabs HD Ready (44.1kHz)"
-                                            else -> "Text & Vision Voice: Device Fallback (Add ELEVENLABS_API_KEY in Secrets)"
+                                            voicePathStatus == VoicePathStatus.LIVE_HD ->
+                                                "Active Path: Gemini Live HD • Male"
+                                            voicePathStatus == VoicePathStatus.GEMINI_TTS_MALE ->
+                                                "Active Path: Gemini 3.1 Flash TTS • Male"
+                                            voicePathStatus == VoicePathStatus.ELEVENLABS_HD || elevenConfigured ->
+                                                "Active Path: ElevenLabs HD • Male (44.1kHz)"
+                                            voicePathStatus == VoicePathStatus.DEVICE_TTS_FALLBACK ->
+                                                "Offline Path: Android Male TTS Fallback"
+                                            else ->
+                                                "Briefings & Chat Voice: Gemini Flash TTS Male Ready"
                                         },
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = if (elevenConfigured || voicePathStatus == VoicePathStatus.LIVE_HD) ArcTeal else ArcStandbyAmber
+                                        color = if (isCloudVoiceReady) ArcTeal else ArcStandbyAmber
                                     )
                                     ttsDiagnostic?.let { diag ->
                                         Text(

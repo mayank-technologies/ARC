@@ -40,7 +40,6 @@ import com.example.data.prefs.ArcPreferences
 import com.example.data.prefs.ArcSettingsState
 import com.example.data.prefs.MaleVoicePreset
 import com.example.data.prefs.PersonalInfo
-import com.example.data.prefs.VoiceGender
 import com.example.data.prefs.VoicePathStatus
 import com.example.data.remote.ExternalApis
 import com.example.data.remote.WeatherSnapshot
@@ -345,7 +344,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                 repository.addMessage("ARC", alert.message, "FACTUAL")
                 _statusToast.value = alert.message
                 if (isCurrentlyOnline()) {
-                    fallbackTts.speak(alert.message, st.voiceGender, st.maleVoicePreset, viewModelScope)
+                    fallbackTts.speak(alert.message, st.maleVoicePreset, viewModelScope)
                 }
             }
         }
@@ -435,7 +434,6 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                     val st = settings.value
                     liveEngine.startLiveSession(
                         userName = st.userName.ifBlank { "Friend" },
-                        voiceGender = st.voiceGender,
                         maleVoicePreset = st.maleVoicePreset,
                         scope = viewModelScope,
                         onTranscriptUpdate = { role, text ->
@@ -494,7 +492,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                 repository.addMessage("ARC", msg, "FACTUAL")
                 if (speakReply) {
                     val st = settings.value
-                    fallbackTts.speak(msg, st.voiceGender, st.maleVoicePreset, this)
+                    fallbackTts.speak(msg, st.maleVoicePreset, this)
                 }
                 return@launch
             }
@@ -505,7 +503,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                 repository.addMessage("ARC", msg, "FACTUAL")
                 if (speakReply) {
                     val st = settings.value
-                    fallbackTts.speak(msg, st.voiceGender, st.maleVoicePreset, this)
+                    fallbackTts.speak(msg, st.maleVoicePreset, this)
                 }
                 return@launch
             }
@@ -517,7 +515,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                     _statusToast.value = warn
                     repository.addMessage("ARC", warn, "FACTUAL")
                     if (speakReply) {
-                        fallbackTts.speak(warn, st.voiceGender, st.maleVoicePreset, this)
+                        fallbackTts.speak(warn, st.maleVoicePreset, this)
                     }
                 }
             }
@@ -528,7 +526,6 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                 val result = liveEngine.sendTextTurn(
                     rawMessage = text,
                     userName = st.userName.ifBlank { "Friend" },
-                    voiceGender = st.voiceGender,
                     maleVoicePreset = st.maleVoicePreset,
                     speakResponse = speakReply,
                     scope = this,
@@ -555,7 +552,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                         repository.addMessage("ARC", fallbackMsg, "EMPATHETIC")
                         _statusToast.value = errText
                         if (speakReply) {
-                            fallbackTts.speak("Sorry, I couldn't connect right now.", st.voiceGender, st.maleVoicePreset, this)
+                            fallbackTts.speak("Sorry, I couldn't connect right now.", st.maleVoicePreset, this)
                         }
                     }
                 )
@@ -630,7 +627,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             val spokenGreeting = "$greeting $name, main आर्क online hoon."
             repository.addMessage("ARC", displayGreeting, "GREETING")
             if (!isActive || !isCurrentlyOnline()) return@launch
-            fallbackTts.speak(spokenGreeting, st.voiceGender, st.maleVoicePreset, this)
+            fallbackTts.speak(spokenGreeting, st.maleVoicePreset, this)
 
             val newsHinglish = newsDeferred.await()
             val weatherSnap = weatherDeferred.await()
@@ -662,24 +659,14 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             val briefingText = "$newsPart$weatherPart$taskPart".trim()
             repository.addMessage("ARC", briefingText, "FACTUAL")
             if (!isActive || !isCurrentlyOnline()) return@launch
-            fallbackTts.speak(briefingText, st.voiceGender, st.maleVoicePreset, this)
-        }
-    }
-
-    fun setVoiceGender(gender: VoiceGender) {
-        viewModelScope.launch {
-            prefs.setVoiceGender(gender)
-            if (!settings.value.isMicMuted) {
-                delay(120L)
-                setMicActive(true)
-            }
+            fallbackTts.speak(briefingText, st.maleVoicePreset, this)
         }
     }
 
     fun setMaleVoicePreset(preset: MaleVoicePreset) {
         viewModelScope.launch {
             prefs.setMaleVoicePreset(preset)
-            if (!settings.value.isMicMuted && settings.value.voiceGender == VoiceGender.MALE) {
+            if (!settings.value.isMicMuted) {
                 delay(120L)
                 setMicActive(true)
             }
@@ -805,7 +792,6 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                         bitmap = scaled,
                         question = prompt,
                         userName = st.userName.ifBlank { "Friend" },
-                        voiceGender = st.voiceGender,
                         maleVoicePreset = st.maleVoicePreset,
                         speakResult = true,
                         scope = viewModelScope
@@ -869,7 +855,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             val report = snap.toHinglishReport(st.userName)
             repository.addMessage("ARC", report, "FACTUAL")
             if (speakReport) {
-                fallbackTts.speak(report, st.voiceGender, st.maleVoicePreset, this)
+                fallbackTts.speak(report, st.maleVoicePreset, this)
             }
         }
     }
@@ -892,7 +878,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             _statusToast.value = "${protocol.name} active"
             if (speakConfirmation && !protocol.goStandby) {
                 val st = settings.value
-                fallbackTts.speak(res.spokenHinglishSummary, st.voiceGender, st.maleVoicePreset, this)
+                fallbackTts.speak(res.spokenHinglishSummary, st.maleVoicePreset, this)
             }
         }
     }

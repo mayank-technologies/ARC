@@ -12,7 +12,6 @@ import com.example.core.AudioRoutingController
 import com.example.core.ContextDetector
 import com.example.data.local.ArcLocalRepository
 import com.example.data.prefs.MaleVoicePreset
-import com.example.data.prefs.VoiceGender
 import com.example.data.prefs.VoicePathStatus
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
@@ -63,8 +62,8 @@ enum class ModelTier(val modelName: String, val label: String) {
 
 /**
  * Core Gemini Live bidirectional voice engine with:
- * - 4-tier model fallback (Gemini 3.1 Live -> 2.5 Native Audio -> Text+ElevenLabs HD)
- * - Deep warm JARVIS-style Male presets (Orus / Charon / Algenib) & Female (Sulafat)
+ * - 4-tier model fallback (Gemini 3.1 Live -> 2.5 Native Audio -> Gemini 3.1 Flash TTS Male)
+ * - Male-only JARVIS presets (Orus / Charon / Algenib) with female voice permanently removed
  * - Wideband speaker/headset audio routing so Live audio avoids telephony DSP compression
  * - Context-aware conversational pacing (GREETING / FACTUAL / CASUAL / EMPATHETIC)
  * - Real-time waveform bar levels (32 bars) that never flicker/collapse during silence gaps
@@ -111,8 +110,7 @@ class GeminiLiveEngine(
     @SuppressLint("MissingPermission")
     suspend fun startLiveSession(
         userName: String,
-        voiceGender: VoiceGender,
-        maleVoicePreset: MaleVoicePreset = MaleVoicePreset.WARM_COMPANION,
+        maleVoicePreset: MaleVoicePreset = MaleVoicePreset.BRITISH_JARVIS,
         scope: CoroutineScope,
         onTranscriptUpdate: (role: String, text: String) -> Unit
     ) {
@@ -129,16 +127,8 @@ class GeminiLiveEngine(
         _engineState.value = VoiceEngineState.CONNECTING
         _statusMessage.value = "Connecting to ARC Live HD..."
 
-        val selectedGeminiVoice = if (voiceGender == VoiceGender.MALE) {
-            maleVoicePreset.geminiVoiceName
-        } else {
-            voiceGender.geminiVoiceName
-        }
-        val voiceLabel = if (voiceGender == VoiceGender.MALE) {
-            "Male • ${maleVoicePreset.label}"
-        } else {
-            voiceGender.label
-        }
+        val selectedGeminiVoice = maleVoicePreset.geminiVoiceName
+        val voiceLabel = "Male • ${maleVoicePreset.label}"
 
         val memories = repository.getAllMemories().map { it.factText }
         val systemPrompt = ContextDetector.buildSystemPrompt(userName, memories)
@@ -261,8 +251,7 @@ class GeminiLiveEngine(
     suspend fun sendTextTurn(
         rawMessage: String,
         userName: String,
-        voiceGender: VoiceGender,
-        maleVoicePreset: MaleVoicePreset = MaleVoicePreset.WARM_COMPANION,
+        maleVoicePreset: MaleVoicePreset = MaleVoicePreset.BRITISH_JARVIS,
         speakResponse: Boolean,
         scope: CoroutineScope,
         onReplyReady: (suspend (String) -> Unit)? = null
@@ -285,7 +274,6 @@ class GeminiLiveEngine(
             wrappedPrompt = wrappedPrompt,
             systemPrompt = systemPrompt,
             rawUserMessage = trimmed,
-            voiceGender = voiceGender,
             maleVoicePreset = maleVoicePreset,
             speakResponse = speakResponse,
             scope = scope,
@@ -297,7 +285,6 @@ class GeminiLiveEngine(
         wrappedPrompt: String,
         systemPrompt: String,
         rawUserMessage: String,
-        voiceGender: VoiceGender,
         maleVoicePreset: MaleVoicePreset,
         speakResponse: Boolean,
         scope: CoroutineScope,
@@ -365,7 +352,7 @@ class GeminiLiveEngine(
                 _engineState.value = VoiceEngineState.SPEAKING
                 startWaveformVisualizer(scope)
                 try {
-                    fallbackTts.speak(finalReply, voiceGender, maleVoicePreset, scope)
+                    fallbackTts.speak(finalReply, maleVoicePreset, scope)
                     _voicePathStatus.value = fallbackTts.voicePathStatus.value
                 } finally {
                     if (liveSession != null) {
@@ -396,8 +383,7 @@ class GeminiLiveEngine(
         bitmap: Bitmap,
         question: String,
         userName: String,
-        voiceGender: VoiceGender,
-        maleVoicePreset: MaleVoicePreset = MaleVoicePreset.WARM_COMPANION,
+        maleVoicePreset: MaleVoicePreset = MaleVoicePreset.BRITISH_JARVIS,
         speakResult: Boolean,
         scope: CoroutineScope
     ): Result<String> {
@@ -422,7 +408,7 @@ class GeminiLiveEngine(
             }
             if (speakResult) {
                 _engineState.value = VoiceEngineState.SPEAKING
-                fallbackTts.speak(text, voiceGender, maleVoicePreset, scope)
+                fallbackTts.speak(text, maleVoicePreset, scope)
                 _voicePathStatus.value = fallbackTts.voicePathStatus.value
             }
             _engineState.value = VoiceEngineState.IDLE
