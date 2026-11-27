@@ -19,9 +19,14 @@ import com.google.mlkit.nl.languageid.LanguageIdentification
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
+import com.google.firebase.Firebase
+import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.GenerativeBackend
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -224,6 +229,54 @@ class ExternalApis(private val context: Context) {
         80, 81, 82 -> "Rain showers"
         95, 96, 99 -> "Thunderstorm"
         else -> "Clear"
+    }
+
+    private val hinglishNewsModel by lazy {
+        Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel("gemini-3.5-flash-lite")
+    }
+
+    fun conditionInHinglish(condition: String): String = when (condition.lowercase()) {
+        "clear sky", "clear" -> "mausam bilkul saaf"
+        "partly cloudy" -> "halke baadal"
+        "overcast" -> "ghane baadal"
+        "foggy" -> "kohra"
+        "light drizzle" -> "halki boonda-baandi"
+        "rain" -> "baarish"
+        "snow" -> "barf-baari"
+        "rain showers" -> "tez baarish"
+        "thunderstorm" -> "aandhi aur baarish"
+        else -> "mausam saaf"
+    }
+
+    /**
+     * Rewrites News API headlines into natural conversational Hinglish (Roman Hindi + everyday English)
+     * using lightweight gemini-3.5-flash-lite with a tight 2.5s timeout and clean fallback.
+     */
+    suspend fun formatHeadlinesInHinglish(articles: List<NewsArticle>): String {
+        if (articles.isEmpty()) return ""
+        val rawHeadlines = articles.take(4).mapIndexed { index, item ->
+            "${index + 1}. ${item.title}"
+        }.joinToString("\n")
+
+        val translated = try {
+            withContext(Dispatchers.IO) {
+                withTimeoutOrNull(2500L) {
+                    val prompt =
+                        "Rewrite these news headlines into 1-2 short, natural conversational Hinglish sentences " +
+                            "(Roman Hindi grammar and Hindi tone mixed with common everyday English nouns). " +
+                            "Keep facts accurate, sound like an Indian companion speaking casually, and do NOT use bullet points, numbers, or markdown:\n$rawHeadlines"
+                    hinglishNewsModel.generateContent(prompt).text?.trim()
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Hinglish news rewrite failed: ${e.message}")
+            null
+        }
+
+        return translated?.takeIf { it.isNotBlank() }
+            ?: articles.joinToString(". ") { it.title }
     }
 
     suspend fun fetchTopNews(query: String = "india", maxItems: Int = 5): Result<List<NewsArticle>> =

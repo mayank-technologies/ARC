@@ -562,9 +562,10 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                 }?.also { _weather.value = it } ?: _weather.value
             }
             val newsDeferred = async(Dispatchers.IO) {
-                withTimeoutOrNull(2800L) {
-                    externalApis.fetchTopNews("india", 2).getOrNull()
-                }
+                withTimeoutOrNull(4200L) {
+                    val list = externalApis.fetchTopNews("india", 2).getOrNull().orEmpty()
+                    if (list.isEmpty()) "" else externalApis.formatHeadlinesInHinglish(list)
+                }.orEmpty()
             }
             val tasksDeferred = async(Dispatchers.IO) {
                 repository.getEnabledReminders()
@@ -576,22 +577,23 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             if (!isActive || !isCurrentlyOnline()) return@launch
             fallbackTts.speak(spokenGreeting, st.voiceGender, st.maleVoicePreset, this)
 
-            val newsList = newsDeferred.await().orEmpty()
+            val newsHinglish = newsDeferred.await()
             val weatherSnap = weatherDeferred.await()
             val tasks = tasksDeferred.await()
 
             // Abort immediately if user switched ARC OFF while greeting/fetches ran
             if (!isActive || !isCurrentlyOnline()) return@launch
 
-            val newsPart = if (newsList.isNotEmpty()) {
-                "Aaj ki taaza khabar hai: ${newsList.joinToString(". ") { it.title }}. "
+            val newsPart = if (newsHinglish.isNotBlank()) {
+                "Aaj ki taaza khabar hai: $newsHinglish "
             } else {
                 ""
             }
 
             val clockStr = LocalTime.now().format(DateTimeFormatter.ofPattern("h:mm a"))
             val weatherPart = if (weatherSnap != null) {
-                "Abhi samay $clockStr hai aur ${weatherSnap.city} ka mausam ${weatherSnap.temperatureC.toInt()} degree aur ${weatherSnap.condition} hai."
+                val cond = externalApis.conditionInHinglish(weatherSnap.condition)
+                "Abhi samay $clockStr hai aur ${weatherSnap.city} ka mausam ${weatherSnap.temperatureC.toInt()} degree, $cond hai."
             } else {
                 "Abhi samay $clockStr hai, lekin mausam ki jaankari abhi uplabdh nahi hai."
             }

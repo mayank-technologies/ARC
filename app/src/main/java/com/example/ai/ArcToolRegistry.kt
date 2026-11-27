@@ -379,10 +379,14 @@ class ArcToolRegistry(
                 val n = externalApis.fetchTopNews(str("topic").ifBlank { "india" }, 4)
                 n.fold(
                     onSuccess = { articles ->
-                        val text = articles.joinToString("; ") { "${it.title} (${it.source})" }
-                        mapOf("success" to true, "headlines" to text.ifBlank { "No headlines right now." })
+                        val hinglishNews = externalApis.formatHeadlinesInHinglish(articles)
+                        mapOf(
+                            "success" to true,
+                            "headlines" to hinglishNews.ifBlank { "Abhi koi taaza khabar nahi hai." },
+                            "instruction" to "Speak these headlines naturally in conversational Hinglish with a Hindi tone."
+                        )
                     },
-                    onFailure = { mapOf("success" to false, "message" to (it.message ?: "News unavailable")) }
+                    onFailure = { mapOf("success" to false, "message" to (it.message ?: "News abhi uplabdh nahi hai.")) }
                 )
             }
             "getCricketScores" -> {
@@ -574,21 +578,32 @@ class ArcToolRegistry(
                 onSideEffect(ToolUiSideEffect("morningBriefing", "Morning Briefing activated", setOnlineState = true))
                 val state = prefs.settingsFlow.first()
                 val now = LocalTime.now()
-                val greeting = ContextDetector.timeOfDayGreeting(now)
+                val greeting = ContextDetector.timeOfDayOnlineGreeting(now)
+                val name = state.userName.ifBlank { "friend" }
+                val newsList = externalApis.fetchTopNews("india", 2).getOrNull().orEmpty()
+                val newsStr = if (newsList.isNotEmpty()) {
+                    "Aaj ki taaza khabar hai: ${externalApis.formatHeadlinesInHinglish(newsList)}. "
+                } else {
+                    ""
+                }
                 val weatherStr = externalApis.fetchWeather().fold(
-                    onSuccess = { "${it.temperatureC.toInt()}°C, ${it.condition} in ${it.city}" },
-                    onFailure = { "weather unavailable right now" }
-                )
-                val newsStr = externalApis.fetchTopNews("india", 2).fold(
-                    onSuccess = { list -> list.joinToString(" & ") { it.title }.ifBlank { "no urgent headlines" } },
-                    onFailure = { "headlines unavailable (configure NEWS_API_KEY)" }
+                    onSuccess = {
+                        val cond = externalApis.conditionInHinglish(it.condition)
+                        "Abhi samay ${now.format(DateTimeFormatter.ofPattern("h:mm a"))} hai aur ${it.city} ka mausam ${it.temperatureC.toInt()} degree, $cond hai."
+                    },
+                    onFailure = {
+                        "Abhi samay ${now.format(DateTimeFormatter.ofPattern("h:mm a"))} hai, lekin mausam ki jaankari abhi uplabdh nahi hai."
+                    }
                 )
                 val todayReminders = repository.getEnabledReminders()
-                val tasksStr = if (todayReminders.isEmpty()) "no tasks today" else "${todayReminders.size} tasks: " +
-                    todayReminders.take(3).joinToString(", ") { it.title }
-                val briefing = "$greeting, ${state.userName.ifBlank { "friend" }}, this is Arc. It's ${now.format(DateTimeFormatter.ofPattern("h:mm a"))}. " +
-                    "Weather: $weatherStr. Top news: $newsStr. Your schedule: $tasksStr."
-                mapOf("success" to true, "briefing" to briefing)
+                val tasksStr = if (todayReminders.isEmpty()) "" else " Aaj aapke ${todayReminders.size} task hain: " +
+                    todayReminders.take(3).joinToString(", ") { it.title } + "."
+                val briefing = "$greeting $name, main आर्क online hoon. $newsStr$weatherStr$tasksStr"
+                mapOf(
+                    "success" to true,
+                    "briefing" to briefing,
+                    "instruction" to "Speak this briefing naturally in conversational Hinglish with a Hindi tone."
+                )
             }
             "nightStandby" -> {
                 // Good Night routine: switch to Standby and mute mic so no background listening occurs
