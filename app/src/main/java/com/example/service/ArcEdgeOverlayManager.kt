@@ -1,11 +1,13 @@
 package com.example.service
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -14,10 +16,12 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import kotlin.math.abs
 
 private const val TAG = "ArcEdgeOverlay"
 
@@ -25,6 +29,7 @@ private const val TAG = "ArcEdgeOverlay"
  * Manages SYSTEM_ALERT_WINDOW overlays:
  * 1) Software cyan/electric-blue edge glow while ARC is listening or speaking.
  * 2) WhatsApp-style floating "Stop Sharing" pill during MediaProjection screen share.
+ * 3) Draggable Floating Mini JARVIS Orb (tap toggles Mic ON/OFF from anywhere; long-press opens ARC).
  */
 class ArcEdgeOverlayManager(private val context: Context) {
 
@@ -32,6 +37,8 @@ class ArcEdgeOverlayManager(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var edgeGlowView: EdgeGlowView? = null
     private var stopSharePillView: View? = null
+    private var floatingOrbView: FloatingMiniOrbView? = null
+    private var floatingOrbParams: WindowManager.LayoutParams? = null
 
     fun canDrawOverlays(): Boolean = Settings.canDrawOverlays(context)
 
@@ -68,6 +75,108 @@ class ArcEdgeOverlayManager(private val context: Context) {
                 runCatching { windowManager.removeViewImmediate(view) }
             }
             edgeGlowView = null
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    fun showOrUpdateFloatingOrb(
+        micActive: Boolean,
+        isSpeaking: Boolean,
+        onTapToggleMic: () -> Unit,
+        onLongPressOpenApp: () -> Unit
+    ) {
+        if (!canDrawOverlays()) return
+        mainHandler.post {
+            try {
+                val existing = floatingOrbView
+                if (existing != null) {
+                    existing.setOrbState(micActive, isSpeaking)
+                    return@post
+                }
+                val density = context.resources.displayMetrics.density
+                val orbSizePx = (54 * density).toInt()
+                val orb = FloatingMiniOrbView(context).apply {
+                    contentDescription = "ARC Floating Mini Orb — tap to toggle Mic ON or OFF"
+                    setOrbState(micActive, isSpeaking)
+                }
+                val params = WindowManager.LayoutParams(
+                    orbSizePx,
+                    orbSizePx,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                    PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    x = (16 * density).toInt()
+                    y = (220 * density).toInt()
+                }
+
+                var initialX = 0
+                var initialY = 0
+                var initialTouchX = 0f
+                var initialTouchY = 0f
+                var isDragging = false
+                var longPressTriggered = false
+                val longPressRunnable = Runnable {
+                    if (!isDragging) {
+                        longPressTriggered = true
+                        onLongPressOpenApp()
+                    }
+                }
+
+                orb.setOnTouchListener { _, event ->
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            initialX = params.x
+                            initialY = params.y
+                            initialTouchX = event.rawX
+                            initialTouchY = event.rawY
+                            isDragging = false
+                            longPressTriggered = false
+                            mainHandler.postDelayed(longPressRunnable, 520L)
+                            true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val dx = (event.rawX - initialTouchX).toInt()
+                            val dy = (event.rawY - initialTouchY).toInt()
+                            if (abs(dx) > 10 || abs(dy) > 10) {
+                                isDragging = true
+                                mainHandler.removeCallbacks(longPressRunnable)
+                                params.x = initialX + dx
+                                params.y = initialY + dy
+                                runCatching { windowManager.updateViewLayout(orb, params) }
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            mainHandler.removeCallbacks(longPressRunnable)
+                            if (!isDragging && !longPressTriggered && event.actionMasked == MotionEvent.ACTION_UP) {
+                                onTapToggleMic()
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                }
+
+                windowManager.addView(orb, params)
+                floatingOrbView = orb
+                floatingOrbParams = params
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to show floating mini orb: ${e.message}")
+            }
+        }
+    }
+
+    fun hideFloatingOrb() {
+        mainHandler.post {
+            floatingOrbView?.let { view ->
+                runCatching { windowManager.removeViewImmediate(view) }
+            }
+            floatingOrbView = null
+            floatingOrbParams = null
         }
     }
 
@@ -129,6 +238,56 @@ class ArcEdgeOverlayManager(private val context: Context) {
             runCatching { windowManager.removeViewImmediate(view) }
         }
         stopSharePillView = null
+    }
+
+    private class FloatingMiniOrbView(context: Context) : View(context) {
+        private var micActive = false
+        private var isSpeaking = false
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+        }
+        private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        fun setOrbState(micOn: Boolean, speaking: Boolean) {
+            micActive = micOn
+            isSpeaking = speaking
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val cx = width / 2f
+            val cy = height / 2f
+            val r = minOf(width, height) / 2f - 4f
+
+            val coreColor = when {
+                isSpeaking -> Color.parseColor("#1DE9B6")
+                micActive -> Color.parseColor("#00E5FF")
+                else -> Color.parseColor("#2563EB")
+            }
+            val outerColor = Color.parseColor("#E6070E20")
+
+            fillPaint.shader = RadialGradient(
+                cx, cy, r,
+                intArrayOf(coreColor, Color.parseColor("#E6142A5E"), outerColor),
+                floatArrayOf(0f, 0.58f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(cx, cy, r, fillPaint)
+
+            ringPaint.strokeWidth = 2.6f * resources.displayMetrics.density
+            ringPaint.color = when {
+                isSpeaking -> Color.parseColor("#1DE9B6")
+                micActive -> Color.parseColor("#00E5FF")
+                else -> Color.parseColor("#9960A5FA")
+            }
+            canvas.drawCircle(cx, cy, r - 2f, ringPaint)
+
+            // Crisp central white JARVIS core dot + mic status accent
+            dotPaint.color = if (micActive) Color.WHITE else Color.parseColor("#FFB300")
+            canvas.drawCircle(cx, cy, r * 0.22f, dotPaint)
+        }
     }
 
     private class EdgeGlowView(context: Context) : View(context) {

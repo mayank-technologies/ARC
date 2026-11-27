@@ -48,6 +48,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Close
@@ -63,6 +64,7 @@ import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.StopScreenShare
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material.icons.filled.Visibility
@@ -123,6 +125,8 @@ import com.example.ai.VoiceEngineState
 import com.example.ui.ArcViewModel
 import com.example.ui.components.ArcBackgroundGrid
 import com.example.ui.components.ArcCoreSphere
+import com.example.ui.components.DiagnosticsHudSheet
+import com.example.ui.components.ProtocolsSheet
 import com.example.ui.theme.ArcAlertCrimson
 import com.example.ui.theme.ArcCyan
 import com.example.ui.theme.ArcGlassBorder
@@ -167,9 +171,13 @@ fun HomeScreen(
     val isScreenSharing by viewModel.isScreenSharing.collectAsStateWithLifecycle()
     val statusToast by viewModel.statusToast.collectAsStateWithLifecycle()
     val galleryNavDate by viewModel.navigateToGalleryDate.collectAsStateWithLifecycle()
+    val protocols by viewModel.protocols.collectAsStateWithLifecycle()
+    val diagnostics by viewModel.diagnostics.collectAsStateWithLifecycle()
+    val showDiagnosticsSheet by viewModel.showDiagnosticsSheet.collectAsStateWithLifecycle()
 
     var showVisionSheet by remember { mutableStateOf(false) }
     var showChatSheet by remember { mutableStateOf(false) }
+    var showProtocolsSheet by remember { mutableStateOf(false) }
     var showCameraCaptureDialog by remember { mutableStateOf(false) }
     var useFrontCameraForAlert by remember { mutableStateOf(false) }
     var chatInput by remember { mutableStateOf("") }
@@ -320,6 +328,46 @@ fun HomeScreen(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (settings.antiTheftArmed) ArcAlertCrimson else ArcTextPrimary
                             )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch { drawerState.close() }
+                                showProtocolsSheet = true
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("drawer_protocols_button"),
+                            border = BorderStroke(1.dp, ArcGlassBorder),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp), tint = ArcCyan)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Protocols", style = MaterialTheme.typography.labelMedium, color = ArcTextPrimary)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch { drawerState.close() }
+                                viewModel.runSystemDiagnostics(speakReport = true)
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("drawer_diagnostics_button"),
+                            border = BorderStroke(1.dp, ArcGlassBorder),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(16.dp), tint = ArcCyan)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Diagnostics", style = MaterialTheme.typography.labelMedium, color = ArcTextPrimary)
                         }
                     }
 
@@ -982,6 +1030,27 @@ fun HomeScreen(
                     viewModel.analyzePhotoUri(uri, "Describe what the camera captured and answer clearly.")
                 }
             }
+        )
+    }
+
+    if (showDiagnosticsSheet && diagnostics != null) {
+        DiagnosticsHudSheet(
+            snapshot = diagnostics!!,
+            userName = settings.userName.ifBlank { "Sir" },
+            onRefresh = { viewModel.runSystemDiagnostics(speakReport = true) },
+            onDismiss = { viewModel.dismissDiagnosticsSheet() }
+        )
+    }
+
+    if (showProtocolsSheet) {
+        ProtocolsSheet(
+            protocols = protocols,
+            onRunProtocol = { protocol -> viewModel.activateProtocol(protocol, speakConfirmation = true) },
+            onDeleteProtocol = { protocol -> viewModel.deleteCustomProtocol(protocol) },
+            onCreateCustom = { name, desc, bright, vol, torch, app, bt, wifi, mic, standby ->
+                viewModel.saveCustomProtocol(name, desc, bright, vol, torch, app, bt, wifi, mic, standby)
+            },
+            onDismiss = { showProtocolsSheet = false }
         )
     }
 }

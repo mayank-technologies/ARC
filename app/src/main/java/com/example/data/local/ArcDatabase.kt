@@ -11,6 +11,8 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "reminders")
@@ -52,6 +54,23 @@ data class GalleryPhotoEntity(
     val dateIso: String, // YYYY-MM-DD
     val label: String = "",
     val capturedAtMillis: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "protocols")
+data class ProtocolEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val description: String = "",
+    val isBuiltIn: Boolean = false,
+    val brightnessPercent: Int = -1, // -1 = unchanged
+    val volumeMode: String = "UNCHANGED", // UNCHANGED, MUTE, LOW, MEDIUM, HIGH
+    val torchMode: String = "UNCHANGED", // UNCHANGED, ON, OFF
+    val openAppName: String = "",
+    val openBluetoothSettings: Boolean = false,
+    val openWifiPanel: Boolean = false,
+    val micMode: String = "UNCHANGED", // UNCHANGED, ON, OFF
+    val goStandby: Boolean = false,
+    val createdAtMillis: Long = System.currentTimeMillis()
 )
 
 @Dao
@@ -117,14 +136,30 @@ interface GalleryPhotoDao {
     suspend fun deleteById(id: Long)
 }
 
+@Dao
+interface ProtocolDao {
+    @Query("SELECT * FROM protocols ORDER BY isBuiltIn DESC, createdAtMillis ASC")
+    fun observeAll(): Flow<List<ProtocolEntity>>
+
+    @Query("SELECT * FROM protocols ORDER BY isBuiltIn DESC, createdAtMillis ASC")
+    suspend fun getAll(): List<ProtocolEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(protocol: ProtocolEntity): Long
+
+    @Query("DELETE FROM protocols WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}
+
 @Database(
     entities = [
         ReminderEntity::class,
         MemoryFactEntity::class,
         ChatMessageEntity::class,
-        GalleryPhotoEntity::class
+        GalleryPhotoEntity::class,
+        ProtocolEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class ArcDatabase : RoomDatabase() {
@@ -132,10 +167,35 @@ abstract class ArcDatabase : RoomDatabase() {
     abstract fun memoryDao(): MemoryDao
     abstract fun chatDao(): ChatMessageDao
     abstract fun galleryDao(): GalleryPhotoDao
+    abstract fun protocolDao(): ProtocolDao
 
     companion object {
         @Volatile
         private var INSTANCE: ArcDatabase? = null
+
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `protocols` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `description` TEXT NOT NULL,
+                        `isBuiltIn` INTEGER NOT NULL,
+                        `brightnessPercent` INTEGER NOT NULL,
+                        `volumeMode` TEXT NOT NULL,
+                        `torchMode` TEXT NOT NULL,
+                        `openAppName` TEXT NOT NULL,
+                        `openBluetoothSettings` INTEGER NOT NULL,
+                        `openWifiPanel` INTEGER NOT NULL,
+                        `micMode` TEXT NOT NULL,
+                        `goStandby` INTEGER NOT NULL,
+                        `createdAtMillis` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
 
         fun getInstance(context: Context): ArcDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -143,7 +203,7 @@ abstract class ArcDatabase : RoomDatabase() {
                     context.applicationContext,
                     ArcDatabase::class.java,
                     "arc_assistant.db"
-                ).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2).build().also { INSTANCE = it }
             }
         }
     }
@@ -154,9 +214,59 @@ class ArcLocalRepository(private val db: ArcDatabase) {
     val memories: Flow<List<MemoryFactEntity>> = db.memoryDao().observeAll()
     val messages: Flow<List<ChatMessageEntity>> = db.chatDao().observeAll()
     val galleryPhotos: Flow<List<GalleryPhotoEntity>> = db.galleryDao().observeAll()
+    val protocols: Flow<List<ProtocolEntity>> = db.protocolDao().observeAll()
 
     suspend fun getAllMemories(): List<MemoryFactEntity> = db.memoryDao().getAll()
     suspend fun getEnabledReminders(): List<ReminderEntity> = db.reminderDao().getAllEnabled()
+    suspend fun getAllProtocols(): List<ProtocolEntity> = db.protocolDao().getAll()
+
+    suspend fun ensureDefaultProtocols() {
+        val existing = db.protocolDao().getAll()
+        if (existing.any { it.isBuiltIn }) return
+        val defaults = listOf(
+            ProtocolEntity(
+                name = "Driving Mode",
+                description = "High volume, Maps navigation & Bluetooth check",
+                isBuiltIn = true,
+                brightnessPercent = 85,
+                volumeMode = "HIGH",
+                openAppName = "Maps",
+                openBluetoothSettings = true,
+                micMode = "ON"
+            ),
+            ProtocolEntity(
+                name = "Work Mode",
+                description = "Calm volume, balanced 55% screen & focus readiness",
+                isBuiltIn = true,
+                brightnessPercent = 55,
+                volumeMode = "LOW",
+                openWifiPanel = false,
+                micMode = "UNCHANGED"
+            ),
+            ProtocolEntity(
+                name = "Gaming Mode",
+                description = "90% brightness & high audio output",
+                isBuiltIn = true,
+                brightnessPercent = 90,
+                volumeMode = "HIGH",
+                torchMode = "OFF"
+            ),
+            ProtocolEntity(
+                name = "Sleep Mode",
+                description = "Dim 10% screen, mute media & enter standby",
+                isBuiltIn = true,
+                brightnessPercent = 10,
+                volumeMode = "MUTE",
+                torchMode = "OFF",
+                micMode = "OFF",
+                goStandby = true
+            )
+        )
+        defaults.forEach { db.protocolDao().insert(it) }
+    }
+
+    suspend fun addProtocol(protocol: ProtocolEntity): Long = db.protocolDao().insert(protocol)
+    suspend fun deleteProtocol(id: Long) = db.protocolDao().deleteById(id)
 
     suspend fun addReminder(reminder: ReminderEntity): Long = db.reminderDao().insert(reminder)
     suspend fun updateReminder(reminder: ReminderEntity) = db.reminderDao().update(reminder)

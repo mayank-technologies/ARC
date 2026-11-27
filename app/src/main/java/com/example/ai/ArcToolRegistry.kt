@@ -1,6 +1,7 @@
 package com.example.ai
 
 import com.example.core.ContextDetector
+import com.example.core.JarvisSystemFeatures
 import com.example.core.ProactiveAlertMonitor
 import com.example.data.local.ArcLocalRepository
 import com.example.data.local.ReminderEntity
@@ -39,7 +40,9 @@ data class ToolUiSideEffect(
     val openGalleryDate: String? = null,
     val requestScreenShare: Boolean = false,
     val setOnlineState: Boolean? = null,
-    val setArmedState: Boolean? = null
+    val setArmedState: Boolean? = null,
+    val showDiagnosticsHud: Boolean = false,
+    val setMicActiveState: Boolean? = null
 )
 
 /**
@@ -279,6 +282,16 @@ class ArcToolRegistry(
                     name = "deepReasonWithClaude",
                     description = "Route a complex multi-step reasoning or planning question through the secondary Claude brain layer.",
                     parameters = mapOf("question" to Schema.string("Complex prompt to analyze"))
+                ),
+                FunctionDeclaration(
+                    name = "runSystemDiagnostics",
+                    description = "Run JARVIS System Diagnostics (real RAM, storage, battery temp & health, network speed, thermal status), display the HUD card, and report status in Hinglish.",
+                    parameters = emptyMap()
+                ),
+                FunctionDeclaration(
+                    name = "activateProtocol",
+                    description = "Activate a multi-action mode/protocol by name (e.g. Driving Mode, Work Mode, Gaming Mode, Sleep Mode, or a user's custom Protocol).",
+                    parameters = mapOf("protocolName" to Schema.string("Protocol or mode name to run"))
                 )
             )
         )
@@ -653,6 +666,61 @@ class ArcToolRegistry(
                     },
                     onFailure = { mapOf("success" to false, "message" to (it.message ?: "Reasoning failed")) }
                 )
+            }
+            "runSystemDiagnostics" -> {
+                val state = prefs.settingsFlow.first()
+                val snap = JarvisSystemFeatures.collectDiagnostics(context)
+                onSideEffect(ToolUiSideEffect("runSystemDiagnostics", "Diagnostics HUD ready", showDiagnosticsHud = true))
+                mapOf(
+                    "success" to true,
+                    "batteryPercent" to snap.batteryPercent,
+                    "batteryTempC" to snap.batteryTempC,
+                    "ramFreePercent" to (100 - snap.ramUsedPercent),
+                    "storageFreeGb" to String.format(java.util.Locale.US, "%.1f", snap.storageFreeGb),
+                    "network" to snap.networkLabel,
+                    "thermalStatus" to snap.thermalStatus,
+                    "report" to snap.toHinglishReport(state.userName),
+                    "instruction" to "Speak this system diagnostics report naturally in Hinglish."
+                )
+            }
+            "activateProtocol" -> {
+                val requested = str("protocolName")
+                repository.ensureDefaultProtocols()
+                val all = repository.getAllProtocols()
+                val normReq = requested.lowercase().replace("mode", "").replace("protocol", "").trim()
+                val matched = all.firstOrNull { p ->
+                    val pNorm = p.name.lowercase().replace("mode", "").replace("protocol", "").trim()
+                    p.name.equals(requested, ignoreCase = true) ||
+                        pNorm == normReq ||
+                        p.name.lowercase().contains(normReq) ||
+                        normReq.contains(pNorm)
+                }
+                if (matched == null) {
+                    val available = all.joinToString(", ") { it.name }
+                    mapOf("success" to false, "message" to "Protocol '$requested' nahi mila. Available protocols: $available")
+                } else {
+                    val res = JarvisSystemFeatures.executeProtocolActions(context, matched, deviceExecutor)
+                    val micChange = when (matched.micMode) {
+                        "ON" -> true
+                        "OFF" -> false
+                        else -> null
+                    }
+                    onSideEffect(
+                        ToolUiSideEffect(
+                            toolName = "activateProtocol",
+                            summary = res.spokenHinglishSummary,
+                            setOnlineState = if (matched.goStandby) false else null,
+                            setMicActiveState = micChange
+                        )
+                    )
+                    mapOf(
+                        "success" to true,
+                        "protocol" to matched.name,
+                        "steps" to res.stepDetails.joinToString(", "),
+                        "message" to res.spokenHinglishSummary,
+                        "instruction" to "Confirm the activated protocol in natural Hinglish."
+                    )
+                }
             }
             else -> mapOf("error" to "Unknown function: $name")
         }

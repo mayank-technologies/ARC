@@ -87,6 +87,7 @@ data class ArcSettingsState(
     val antiTheftArmed: Boolean = false,
     // Controls Battery threshold alerts (20%, 15%, 10%), charging start confirmation & mobile-data warnings
     val proactiveAlertsEnabled: Boolean = true,
+    val floatingOrbEnabled: Boolean = false,
     val personalInfo: PersonalInfo = PersonalInfo(),
     val enabledNotificationApps: Set<String> = setOf(
         "com.whatsapp",
@@ -117,6 +118,7 @@ class ArcPreferences(private val context: Context) {
         val IS_ONLINE = booleanPreferencesKey("is_online")
         val ANTI_THEFT_ARMED = booleanPreferencesKey("anti_theft_armed")
         val PROACTIVE_ALERTS_ENABLED = booleanPreferencesKey("proactive_alerts_enabled")
+        val FLOATING_ORB_ENABLED = booleanPreferencesKey("floating_orb_enabled")
         val AUTOFILL_NAME = stringPreferencesKey("autofill_name")
         val AUTOFILL_EMAIL = stringPreferencesKey("autofill_email")
         val AUTOFILL_PHONE = stringPreferencesKey("autofill_phone")
@@ -141,6 +143,7 @@ class ArcPreferences(private val context: Context) {
             isOnline = prefs[Keys.IS_ONLINE] ?: true,
             antiTheftArmed = prefs[Keys.ANTI_THEFT_ARMED] ?: false,
             proactiveAlertsEnabled = prefs[Keys.PROACTIVE_ALERTS_ENABLED] ?: true,
+            floatingOrbEnabled = prefs[Keys.FLOATING_ORB_ENABLED] ?: false,
             personalInfo = PersonalInfo(
                 fullName = prefs[Keys.AUTOFILL_NAME] ?: (prefs[Keys.USER_NAME] ?: ""),
                 email = prefs[Keys.AUTOFILL_EMAIL] ?: "",
@@ -193,6 +196,10 @@ class ArcPreferences(private val context: Context) {
 
     suspend fun setProactiveAlertsEnabled(enabled: Boolean) {
         context.arcDataStore.edit { it[Keys.PROACTIVE_ALERTS_ENABLED] = enabled }
+    }
+
+    suspend fun setFloatingOrbEnabled(enabled: Boolean) {
+        context.arcDataStore.edit { it[Keys.FLOATING_ORB_ENABLED] = enabled }
     }
 
     suspend fun savePersonalInfo(info: PersonalInfo) {

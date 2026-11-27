@@ -11,24 +11,30 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.MainActivity
 import com.example.ai.ArcToolRegistry
 import com.example.ai.ClaudeReasoningClient
 import com.example.ai.FallbackTtsManager
 import com.example.ai.GeminiLiveEngine
 import com.example.ai.ModelTier
 import com.example.ai.VoiceEngineState
+import com.example.core.ArcFloatingOrbController
 import com.example.core.AudioRoutingController
 import com.example.core.ContextDetector
+import com.example.core.JarvisSystemFeatures
 import com.example.core.ProactiveAlertMonitor
+import com.example.core.SystemDiagnosticsSnapshot
 import com.example.data.local.ArcDatabase
 import com.example.data.local.ArcLocalRepository
 import com.example.data.local.ChatMessageEntity
 import com.example.data.local.GalleryPhotoEntity
 import com.example.data.local.MemoryFactEntity
+import com.example.data.local.ProtocolEntity
 import com.example.data.local.ReminderEntity
 import com.example.data.prefs.ArcPreferences
 import com.example.data.prefs.ArcSettingsState
@@ -39,6 +45,7 @@ import com.example.data.prefs.VoicePathStatus
 import com.example.data.remote.ExternalApis
 import com.example.data.remote.WeatherSnapshot
 import com.example.device.DeviceActionExecutor
+import com.example.service.ArcEdgeOverlayManager
 import com.example.service.ArcForegroundService
 import com.example.service.ReminderScheduler
 import com.example.service.ServiceEvent
@@ -93,6 +100,8 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
     private val _requestFrontPhotoCapture = MutableStateFlow(false)
     val requestFrontPhotoCapture = _requestFrontPhotoCapture.asStateFlow()
 
+    private val floatingOrbOverlay = ArcEdgeOverlayManager(appContext)
+
     private val toolRegistry = ArcToolRegistry(
         context = appContext,
         prefs = prefs,
@@ -105,9 +114,18 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             effect.setOnlineState?.let { online ->
                 viewModelScope.launch { updateOnlineState(online, speakRoutine = false) }
             }
+            effect.setMicActiveState?.let { micOn ->
+                setMicActive(micOn)
+            }
             effect.setArmedState?.let { armed ->
                 if (armed) ensureForegroundServiceBound()
                 fgService?.setAntiTheftArmed(armed)
+            }
+            if (effect.showDiagnosticsHud) {
+                viewModelScope.launch {
+                    _diagnostics.value = JarvisSystemFeatures.collectDiagnostics(appContext)
+                    _showDiagnosticsSheet.value = true
+                }
             }
         }
     )
@@ -137,6 +155,9 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val galleryPhotos: StateFlow<List<GalleryPhotoEntity>> = repository.galleryPhotos
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val protocols: StateFlow<List<ProtocolEntity>> = repository.protocols
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val voiceState: StateFlow<VoiceEngineState> = combine(
@@ -181,6 +202,12 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _chatError = MutableStateFlow<String?>(null)
     val chatError = _chatError.asStateFlow()
+
+    private val _diagnostics = MutableStateFlow<SystemDiagnosticsSnapshot?>(null)
+    val diagnostics = _diagnostics.asStateFlow()
+
+    private val _showDiagnosticsSheet = MutableStateFlow(false)
+    val showDiagnosticsSheet = _showDiagnosticsSheet.asStateFlow()
 
     private var fgService: ArcForegroundService? = null
     private var serviceBound = false
@@ -246,7 +273,35 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
         startClockTicker()
         refreshWeather()
         observeEdgeOverlaySync()
+        observeFloatingOrbSync()
         observeProactiveAlerts()
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.ensureDefaultProtocols()
+        }
+    }
+
+    private fun observeFloatingOrbSync() {
+        ArcFloatingOrbController.onToggleMic = { toggleMicSession() }
+        ArcFloatingOrbController.onOpenArcHome = {
+            val intent = Intent(appContext, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            runCatching { appContext.startActivity(intent) }
+        }
+        viewModelScope.launch {
+            combine(settings, voiceState) { st, vs -> st to vs }.collect { (st, vs) ->
+                if (st.floatingOrbEnabled && Settings.canDrawOverlays(appContext)) {
+                    floatingOrbOverlay.showOrUpdateFloatingOrb(
+                        micActive = !st.isMicMuted,
+                        isSpeaking = vs == VoiceEngineState.SPEAKING,
+                        onTapToggleMic = { ArcFloatingOrbController.onToggleMic?.invoke() },
+                        onLongPressOpenApp = { ArcFloatingOrbController.onOpenArcHome?.invoke() }
+                    )
+                } else {
+                    floatingOrbOverlay.hideFloatingOrb()
+                }
+            }
+        }
     }
 
     private fun startClockTicker() {
@@ -794,11 +849,104 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
         _statusToast.value = null
     }
 
+    fun setFloatingOrbEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            if (enabled && !Settings.canDrawOverlays(appContext)) {
+                _statusToast.value = "Grant Display Over Other Apps permission for Floating Mini Orb"
+                return@launch
+            }
+            prefs.setFloatingOrbEnabled(enabled)
+            _statusToast.value = if (enabled) "Floating Mini JARVIS Orb enabled" else "Floating Mini Orb hidden"
+        }
+    }
+
+    fun runSystemDiagnostics(speakReport: Boolean = true) {
+        viewModelScope.launch {
+            val snap = JarvisSystemFeatures.collectDiagnostics(appContext)
+            _diagnostics.value = snap
+            _showDiagnosticsSheet.value = true
+            val st = settings.value
+            val report = snap.toHinglishReport(st.userName)
+            repository.addMessage("ARC", report, "FACTUAL")
+            if (speakReport) {
+                fallbackTts.speak(report, st.voiceGender, st.maleVoicePreset, this)
+            }
+        }
+    }
+
+    fun dismissDiagnosticsSheet() {
+        _showDiagnosticsSheet.value = false
+    }
+
+    fun activateProtocol(protocol: ProtocolEntity, speakConfirmation: Boolean = true) {
+        viewModelScope.launch {
+            val res = JarvisSystemFeatures.executeProtocolActions(appContext, protocol, deviceExecutor)
+            when (protocol.micMode) {
+                "ON" -> setMicActive(true)
+                "OFF" -> setMicActive(false)
+            }
+            if (protocol.goStandby) {
+                updateOnlineState(false, speakRoutine = false)
+            }
+            repository.addMessage("ARC", res.spokenHinglishSummary, "FACTUAL")
+            _statusToast.value = "${protocol.name} active"
+            if (speakConfirmation && !protocol.goStandby) {
+                val st = settings.value
+                fallbackTts.speak(res.spokenHinglishSummary, st.voiceGender, st.maleVoicePreset, this)
+            }
+        }
+    }
+
+    fun saveCustomProtocol(
+        name: String,
+        description: String,
+        brightnessPercent: Int,
+        volumeMode: String,
+        torchMode: String,
+        openAppName: String,
+        openBluetoothSettings: Boolean,
+        openWifiPanel: Boolean,
+        micMode: String,
+        goStandby: Boolean
+    ) {
+        val cleaned = name.trim()
+        if (cleaned.isBlank()) return
+        viewModelScope.launch {
+            repository.addProtocol(
+                ProtocolEntity(
+                    name = cleaned,
+                    description = description.trim().ifBlank { "Custom multi-action protocol" },
+                    isBuiltIn = false,
+                    brightnessPercent = brightnessPercent,
+                    volumeMode = volumeMode,
+                    torchMode = torchMode,
+                    openAppName = openAppName.trim(),
+                    openBluetoothSettings = openBluetoothSettings,
+                    openWifiPanel = openWifiPanel,
+                    micMode = micMode,
+                    goStandby = goStandby
+                )
+            )
+            _statusToast.value = "Protocol '$cleaned' saved"
+        }
+    }
+
+    fun deleteCustomProtocol(protocol: ProtocolEntity) {
+        if (protocol.isBuiltIn) return
+        viewModelScope.launch {
+            repository.deleteProtocol(protocol.id)
+            _statusToast.value = "Deleted ${protocol.name}"
+        }
+    }
+
     fun clearChatHistory() {
         viewModelScope.launch { repository.clearMessages() }
     }
 
     override fun onCleared() {
+        ArcFloatingOrbController.onToggleMic = null
+        ArcFloatingOrbController.onOpenArcHome = null
+        floatingOrbOverlay.hideFloatingOrb()
         ProactiveAlertMonitor.release(appContext)
         if (serviceBound) {
             runCatching { appContext.unbindService(serviceConnection) }

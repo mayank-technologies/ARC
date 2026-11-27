@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PrivacyTip
@@ -68,6 +69,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,6 +82,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.data.prefs.MaleVoicePreset
@@ -141,6 +146,18 @@ fun SettingsScreen(
 
     val dpm = remember { context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager }
     val adminComponent = remember { ComponentName(context, ArcDeviceAdminReceiver::class.java) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var overlayPermissionGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                overlayPermissionGranted = Settings.canDrawOverlays(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         ArcBackgroundGrid()
@@ -350,6 +367,87 @@ fun SettingsScreen(
                                 ),
                                 modifier = Modifier.testTag("proactive_alerts_switch")
                             )
+                        }
+                    }
+                }
+
+                // 2B) FLOATING MINI JARVIS ORB
+                item {
+                    SettingsSectionCard(icon = Icons.Default.Layers, title = "Floating Mini JARVIS Orb") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text(
+                                    text = if (settings.floatingOrbEnabled && overlayPermissionGranted) {
+                                        "Floating Orb: ACTIVE"
+                                    } else {
+                                        "Floating Orb: OFF"
+                                    },
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (settings.floatingOrbEnabled && overlayPermissionGranted) ArcCyan else ArcTextSecondary
+                                )
+                                Text(
+                                    text = "Keep a draggable JARVIS orb over other apps. Tap anywhere to toggle Mic ON/OFF, drag to move, or long-press to open ARC.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = ArcTextSecondary
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = if (overlayPermissionGranted) {
+                                        "Overlay Permission: Granted"
+                                    } else {
+                                        "Overlay Permission: Required to display over other apps"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (overlayPermissionGranted) ArcSuccessGreen else ArcStandbyAmber
+                                )
+                            }
+                            Switch(
+                                checked = settings.floatingOrbEnabled && overlayPermissionGranted,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && !Settings.canDrawOverlays(context)) {
+                                        viewModel.setFloatingOrbEnabled(true)
+                                        context.startActivity(
+                                            Intent(
+                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                Uri.parse("package:${context.packageName}")
+                                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        )
+                                    } else {
+                                        viewModel.setFloatingOrbEnabled(enabled)
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = ArcVoid,
+                                    checkedTrackColor = ArcCyan,
+                                    uncheckedThumbColor = ArcTextSecondary,
+                                    uncheckedTrackColor = ArcSurfaceElevated
+                                ),
+                                modifier = Modifier.testTag("floating_orb_switch")
+                            )
+                        }
+                        if (!overlayPermissionGranted) {
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    context.startActivity(
+                                        Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:${context.packageName}")
+                                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                },
+                                border = BorderStroke(1.dp, ArcCyan.copy(alpha = 0.55f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
+                                    .testTag("grant_overlay_permission_button")
+                            ) {
+                                Text("Grant Overlay Permission", color = ArcCyan)
+                            }
                         }
                     }
                 }
