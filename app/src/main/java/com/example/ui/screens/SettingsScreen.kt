@@ -11,16 +11,19 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,7 +32,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -73,15 +80,19 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -111,7 +122,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SettingsScreen(
     viewModel: ArcViewModel,
@@ -186,7 +197,9 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding)
                     .navigationBarsPadding()
+                    .imePadding()
                     .padding(horizontal = 16.dp)
                     .widthIn(max = 600.dp),
                 contentPadding = PaddingValues(bottom = 32.dp),
@@ -586,9 +599,13 @@ fun SettingsScreen(
 
                 // 4) LONG-TERM MEMORY
                 item {
+                    val memoryRowBringIntoView = remember { BringIntoViewRequester() }
+                    val memoryScope = rememberCoroutineScope()
                     SettingsSectionCard(icon = Icons.Default.Psychology, title = "Long-Term Memory") {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .bringIntoViewRequester(memoryRowBringIntoView),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -603,7 +620,16 @@ fun SettingsScreen(
                                     focusedTextColor = ArcTextPrimary,
                                     unfocusedTextColor = ArcTextPrimary
                                 ),
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .onFocusChanged { focusState ->
+                                        if (focusState.isFocused) {
+                                            memoryScope.launch {
+                                                delay(180)
+                                                memoryRowBringIntoView.bringIntoView()
+                                            }
+                                        }
+                                    }
                             )
                             Button(
                                 onClick = {
@@ -792,8 +818,11 @@ private fun SettingsSectionCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ArcField(label: String, value: String, onValueChange: (String) -> Unit) {
+    val bringIntoView = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -807,7 +836,17 @@ private fun ArcField(label: String, value: String, onValueChange: (String) -> Un
             focusedTextColor = ArcTextPrimary,
             unfocusedTextColor = ArcTextPrimary
         ),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .bringIntoViewRequester(bringIntoView)
+            .onFocusChanged { focusState ->
+                if (focusState.isFocused) {
+                    scope.launch {
+                        delay(180)
+                        bringIntoView.bringIntoView()
+                    }
+                }
+            }
     )
 }
 
@@ -842,7 +881,13 @@ private fun AddReminderDialog(
         containerColor = ArcSurface,
         title = { Text("Schedule Reminder / Alarm", color = ArcCyan) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .imePadding()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 ArcField("Title", title) { title = it }
                 ArcField("Trigger in (minutes)", minutes) { minutes = it.filter { c -> c.isDigit() } }
                 Text("Recurrence", style = MaterialTheme.typography.labelMedium, color = ArcTextSecondary)

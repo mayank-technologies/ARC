@@ -11,24 +11,36 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,10 +49,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AccessibilityNew
@@ -68,20 +84,24 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -90,6 +110,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -111,6 +133,7 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NameOnboardingScreen(
     onContinue: (String) -> Unit
@@ -123,160 +146,229 @@ fun NameOnboardingScreen(
         animationSpec = infiniteRepeatable(tween(9000, easing = LinearEasing), RepeatMode.Restart),
         label = "orbit"
     )
+    val density = LocalDensity.current
+    val imeVisible = WindowInsets.ime.getBottom(density) > 0
+    val scrollState = rememberScrollState()
+    val cardBringIntoView = remember { BringIntoViewRequester() }
+    val coroutineScope = rememberCoroutineScope()
+
+    val emblemRingSize by animateDpAsState(
+        targetValue = if (imeVisible) 68.dp else 164.dp,
+        animationSpec = tween(durationMillis = 220),
+        label = "emblem_ring_size"
+    )
+    val emblemImageSize by animateDpAsState(
+        targetValue = if (imeVisible) 48.dp else 116.dp,
+        animationSpec = tween(durationMillis = 220),
+        label = "emblem_image_size"
+    )
+    val emblemToTitleGap by animateDpAsState(
+        targetValue = if (imeVisible) 8.dp else 24.dp,
+        animationSpec = tween(durationMillis = 220),
+        label = "emblem_title_gap"
+    )
+    val titleToCardGap by animateDpAsState(
+        targetValue = if (imeVisible) 14.dp else 32.dp,
+        animationSpec = tween(durationMillis = 220),
+        label = "title_card_gap"
+    )
+
+    LaunchedEffect(imeVisible) {
+        if (imeVisible) {
+            delay(160)
+            cardBringIntoView.bringIntoView()
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         ArcBackgroundGrid()
 
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 24.dp)
+                .imePadding()
                 .widthIn(max = 520.dp)
-                .align(Alignment.Center),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+                .align(Alignment.Center)
         ) {
-            // Glowing ring with geometric "A" logo & orbital shimmer particles
-            Box(
-                modifier = Modifier.size(164.dp),
-                contentAlignment = Alignment.Center
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = maxHeight)
+                    .verticalScroll(scrollState)
+                    .padding(horizontal = 24.dp, vertical = if (imeVisible) 12.dp else 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = if (imeVisible) Arrangement.Top else Arrangement.Center
             ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val cx = size.width / 2f
-                    val cy = size.height / 2f
-                    val r = size.minDimension * 0.44f
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(ArcCyan.copy(alpha = 0.28f), Color.Transparent),
-                            center = Offset(cx, cy),
-                            radius = size.minDimension * 0.52f
-                        ),
-                        radius = size.minDimension * 0.52f,
-                        center = Offset(cx, cy)
-                    )
-                    for (i in 0 until 12) {
-                        val a = orbit + i * (2f * PI.toFloat() / 12f)
-                        val px = cx + cos(a) * r
-                        val py = cy + sin(a) * r
+                // Glowing ring with geometric "A" logo & orbital shimmer particles (compacts when keyboard opens)
+                Box(
+                    modifier = Modifier.size(emblemRingSize),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val cx = size.width / 2f
+                        val cy = size.height / 2f
+                        val r = size.minDimension * 0.44f
                         drawCircle(
-                            color = if (i % 2 == 0) ArcCyan else ArcIonBlue,
-                            radius = if (i % 3 == 0) 3.dp.toPx() else 1.8.dp.toPx(),
-                            center = Offset(px, py)
+                            brush = Brush.radialGradient(
+                                colors = listOf(ArcCyan.copy(alpha = 0.28f), Color.Transparent),
+                                center = Offset(cx, cy),
+                                radius = size.minDimension * 0.52f
+                            ),
+                            radius = size.minDimension * 0.52f,
+                            center = Offset(cx, cy)
+                        )
+                        for (i in 0 until 12) {
+                            val a = orbit + i * (2f * PI.toFloat() / 12f)
+                            val px = cx + cos(a) * r
+                            val py = cy + sin(a) * r
+                            drawCircle(
+                                color = if (i % 2 == 0) ArcCyan else ArcIonBlue,
+                                radius = if (imeVisible) {
+                                    if (i % 3 == 0) 2.dp.toPx() else 1.2.dp.toPx()
+                                } else {
+                                    if (i % 3 == 0) 3.dp.toPx() else 1.8.dp.toPx()
+                                },
+                                center = Offset(px, py)
+                            )
+                        }
+                    }
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_launcher_art_1795527374577),
+                        contentDescription = "ARC Geometric Emblem",
+                        modifier = Modifier
+                            .size(emblemImageSize)
+                            .clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(emblemToTitleGap))
+
+                Text(
+                    text = "ARC",
+                    style = if (imeVisible) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.displayLarge,
+                    color = ArcCyan
+                )
+                AnimatedVisibility(
+                    visible = !imeVisible,
+                    enter = fadeIn(tween(180)) + expandVertically(tween(200)),
+                    exit = fadeOut(tween(150)) + shrinkVertically(tween(180))
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Your Personal Voice & Device Companion",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = ArcTextSecondary,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
-                Image(
-                    painter = painterResource(id = R.drawable.ic_launcher_art_1795527374577),
-                    contentDescription = "ARC Geometric Emblem",
+
+                Spacer(modifier = Modifier.height(titleToCardGap))
+
+                // Glassmorphism onboarding card — kept completely above the keyboard with Get Started visible
+                Card(
                     modifier = Modifier
-                        .size(116.dp)
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Text(
-                text = "ARC",
-                style = MaterialTheme.typography.displayLarge,
-                color = ArcCyan
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Your Personal Voice & Device Companion",
-                style = MaterialTheme.typography.bodyLarge,
-                color = ArcTextSecondary,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            // Glassmorphism onboarding card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = ArcSurface.copy(alpha = 0.82f)),
-                border = BorderStroke(1.dp, ArcGlassBorder)
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                        .fillMaxWidth()
+                        .bringIntoViewRequester(cardBringIntoView),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = ArcSurface.copy(alpha = 0.82f)),
+                    border = BorderStroke(1.dp, ArcGlassBorder)
                 ) {
-                    Text(
-                        text = "What should ARC call you?",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = ArcTextPrimary
-                    )
-                    Text(
-                        text = "Used for personalized morning briefings, reminders, and natural voice responses.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = ArcTextSecondary
-                    )
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        singleLine = true,
-                        placeholder = { Text("Enter your name") },
-                        keyboardOptions = KeyboardOptions(
-                            capitalization = KeyboardCapitalization.Words,
-                            imeAction = ImeAction.Done
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onDone = { if (name.isNotBlank()) onContinue(name) }
-                        ),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = ArcCyan,
-                            unfocusedBorderColor = ArcGlassBorder,
-                            focusedTextColor = ArcTextPrimary,
-                            unfocusedTextColor = ArcTextPrimary,
-                            cursorColor = ArcCyan
-                        ),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("onboarding_name_input")
-                    )
-
-                    Button(
-                        onClick = { onContinue(name.trim().ifBlank { "Commander" }) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(54.dp)
-                            .testTag("get_started_button"),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.Transparent,
-                            contentColor = ArcVoid
-                        ),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+                    Column(
+                        modifier = Modifier.padding(if (imeVisible) 18.dp else 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(if (imeVisible) 12.dp else 16.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    brush = Brush.horizontalGradient(listOf(ArcCyan, ArcIonBlue)),
-                                    shape = RoundedCornerShape(16.dp)
-                                ),
-                            contentAlignment = Alignment.Center
+                        Text(
+                            text = "What should ARC call you?",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = ArcTextPrimary
+                        )
+                        AnimatedVisibility(
+                            visible = !imeVisible,
+                            enter = fadeIn(tween(180)) + expandVertically(tween(200)),
+                            exit = fadeOut(tween(150)) + shrinkVertically(tween(180))
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            Text(
+                                text = "Used for personalized morning briefings, reminders, and natural voice responses.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ArcTextSecondary
+                            )
+                        }
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            singleLine = true,
+                            placeholder = { Text("Enter your name") },
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.Words,
+                                imeAction = ImeAction.Done
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = { if (name.isNotBlank()) onContinue(name) }
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = ArcCyan,
+                                unfocusedBorderColor = ArcGlassBorder,
+                                focusedTextColor = ArcTextPrimary,
+                                unfocusedTextColor = ArcTextPrimary,
+                                cursorColor = ArcCyan
+                            ),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { focusState ->
+                                    if (focusState.isFocused) {
+                                        coroutineScope.launch {
+                                            delay(200)
+                                            cardBringIntoView.bringIntoView()
+                                        }
+                                    }
+                                }
+                                .testTag("onboarding_name_input")
+                        )
+
+                        Button(
+                            onClick = { onContinue(name.trim().ifBlank { "Commander" }) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp)
+                                .testTag("get_started_button"),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color.Transparent,
+                                contentColor = ArcVoid
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        brush = Brush.horizontalGradient(listOf(ArcCyan, ArcIonBlue)),
+                                        shape = RoundedCornerShape(16.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = "Get Started",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = ArcVoid
-                                )
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                    contentDescription = null,
-                                    tint = ArcVoid
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "Get Started",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ArcVoid
+                                    )
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                        contentDescription = null,
+                                        tint = ArcVoid
+                                    )
+                                }
                             }
                         }
                     }
