@@ -20,26 +20,30 @@ private val Context.arcDataStore: DataStore<Preferences> by preferencesDataStore
 enum class MaleVoicePreset(
     val geminiVoiceName: String,
     val elevenLabsVoiceId: String,
+    val deepBassPitchMultiplier: Float,
     val label: String,
     val subtitle: String
 ) {
     WARM_COMPANION(
         geminiVoiceName = "Orus",
         elevenLabsVoiceId = "nPczCjzI2devNBz1zQrb", // Brian
+        deepBassPitchMultiplier = 0.92f,
         label = "Warm Companion",
         subtitle = "Deep, relaxed & warm human tone (Orus / Brian)"
     ),
     BRITISH_JARVIS(
         geminiVoiceName = "Charon",
         elevenLabsVoiceId = "onwK4e9ZLuTAKqWW03F9", // Daniel
+        deepBassPitchMultiplier = 0.89f,
         label = "British JARVIS",
-        subtitle = "Calm, articulate butler poise (Charon / Daniel)"
+        subtitle = "Calm, articulate deep butler poise (Charon / Daniel)"
     ),
     DEEP_BARITONE(
         geminiVoiceName = "Algenib",
         elevenLabsVoiceId = "pNInz6obpgDQGcFmaJgB", // Adam
+        deepBassPitchMultiplier = 0.85f,
         label = "Deep Baritone",
-        subtitle = "Low-pitched rich resonant timber (Algenib / Adam)"
+        subtitle = "Ultra-deep rich bass resonance (Algenib / Adam)"
     )
 }
 
@@ -71,6 +75,7 @@ data class ArcSettingsState(
     val onboardingCompleted: Boolean = false,
     val permissionsReviewed: Boolean = false,
     val maleVoicePreset: MaleVoicePreset = MaleVoicePreset.BRITISH_JARVIS,
+    val deepBassBoostEnabled: Boolean = true,
     val isMicMuted: Boolean = true,
     val isOnline: Boolean = true,
     val antiTheftArmed: Boolean = false,
@@ -100,6 +105,7 @@ class ArcPreferences(private val context: Context) {
         val PERMISSIONS_REVIEWED = booleanPreferencesKey("permissions_reviewed")
         val VOICE_GENDER = stringPreferencesKey("voice_gender")
         val MALE_VOICE_PRESET = stringPreferencesKey("male_voice_preset")
+        val DEEP_BASS_BOOST_ENABLED = booleanPreferencesKey("deep_bass_boost_enabled")
         val MIC_MUTED = booleanPreferencesKey("mic_muted")
         val IS_ONLINE = booleanPreferencesKey("is_online")
         val ANTI_THEFT_ARMED = booleanPreferencesKey("anti_theft_armed")
@@ -121,6 +127,7 @@ class ArcPreferences(private val context: Context) {
             onboardingCompleted = prefs[Keys.ONBOARDING_COMPLETED] ?: false,
             permissionsReviewed = prefs[Keys.PERMISSIONS_REVIEWED] ?: false,
             maleVoicePreset = preset,
+            deepBassBoostEnabled = prefs[Keys.DEEP_BASS_BOOST_ENABLED] ?: true,
             // Default to muted (OFF) until user explicitly taps Mic ON; persisted afterward
             isMicMuted = prefs[Keys.MIC_MUTED] ?: true,
             isOnline = prefs[Keys.IS_ONLINE] ?: true,
@@ -162,6 +169,10 @@ class ArcPreferences(private val context: Context) {
             it[Keys.VOICE_GENDER] = "MALE"
             it[Keys.MALE_VOICE_PRESET] = preset.name
         }
+    }
+
+    suspend fun setDeepBassBoostEnabled(enabled: Boolean) {
+        context.arcDataStore.edit { it[Keys.DEEP_BASS_BOOST_ENABLED] = enabled }
     }
 
     suspend fun setMicMuted(muted: Boolean) {

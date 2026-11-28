@@ -13,6 +13,7 @@ import com.example.service.ArcAccessibilityService
 import com.example.service.ArcNotificationListenerService
 import com.example.service.ReminderScheduler
 import android.content.Context
+import android.provider.Settings
 import android.util.Log
 import com.google.firebase.ai.type.FunctionCallPart
 import com.google.firebase.ai.type.FunctionDeclaration
@@ -42,7 +43,8 @@ data class ToolUiSideEffect(
     val setOnlineState: Boolean? = null,
     val setArmedState: Boolean? = null,
     val showDiagnosticsHud: Boolean = false,
-    val setMicActiveState: Boolean? = null
+    val setMicActiveState: Boolean? = null,
+    val setFloatingOrbState: Boolean? = null
 )
 
 /**
@@ -292,6 +294,11 @@ class ArcToolRegistry(
                     name = "activateProtocol",
                     description = "Activate a multi-action mode/protocol by name (e.g. Driving Mode, Work Mode, Gaming Mode, Sleep Mode, or a user's custom Protocol).",
                     parameters = mapOf("protocolName" to Schema.string("Protocol or mode name to run"))
+                ),
+                FunctionDeclaration(
+                    name = "toggleFloatingOrb",
+                    description = "Turn the Floating Mini JARVIS Orb overlay ON or OFF over other apps so the user can toggle the mic from anywhere.",
+                    parameters = mapOf("enable" to Schema.boolean("True to activate the floating orb, false to hide it"))
                 )
             )
         )
@@ -719,6 +726,32 @@ class ArcToolRegistry(
                         "steps" to res.stepDetails.joinToString(", "),
                         "message" to res.spokenHinglishSummary,
                         "instruction" to "Confirm the activated protocol in natural Hinglish."
+                    )
+                }
+            }
+            "toggleFloatingOrb" -> {
+                val enable = bool("enable", true)
+                onSideEffect(
+                    ToolUiSideEffect(
+                        toolName = "toggleFloatingOrb",
+                        summary = if (enable) "Floating Mini Orb requested" else "Floating Mini Orb hidden",
+                        setFloatingOrbState = enable
+                    )
+                )
+                if (enable && !Settings.canDrawOverlays(context)) {
+                    mapOf(
+                        "success" to false,
+                        "needsUserAction" to true,
+                        "message" to "Floating Mini Orb activate karne ke liye Settings mein Display Over Other Apps permission allow karni hogi."
+                    )
+                } else {
+                    mapOf(
+                        "success" to true,
+                        "message" to if (enable) {
+                            "Floating Mini JARVIS Orb activate ho gaya hai. Screen par kisi bhi app ke upar tap karke Mic ON/OFF kar sakte ho."
+                        } else {
+                            "Floating Mini JARVIS Orb band kar diya gaya hai."
+                        }
                     )
                 }
             }

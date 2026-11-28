@@ -252,6 +252,7 @@ class GeminiLiveEngine(
         rawMessage: String,
         userName: String,
         maleVoicePreset: MaleVoicePreset = MaleVoicePreset.BRITISH_JARVIS,
+        deepBassEnabled: Boolean = true,
         speakResponse: Boolean,
         scope: CoroutineScope,
         onReplyReady: (suspend (String) -> Unit)? = null
@@ -275,6 +276,7 @@ class GeminiLiveEngine(
             systemPrompt = systemPrompt,
             rawUserMessage = trimmed,
             maleVoicePreset = maleVoicePreset,
+            deepBassEnabled = deepBassEnabled,
             speakResponse = speakResponse,
             scope = scope,
             onReplyReady = onReplyReady
@@ -286,6 +288,7 @@ class GeminiLiveEngine(
         systemPrompt: String,
         rawUserMessage: String,
         maleVoicePreset: MaleVoicePreset,
+        deepBassEnabled: Boolean,
         speakResponse: Boolean,
         scope: CoroutineScope,
         onReplyReady: (suspend (String) -> Unit)? = null
@@ -352,7 +355,7 @@ class GeminiLiveEngine(
                 _engineState.value = VoiceEngineState.SPEAKING
                 startWaveformVisualizer(scope)
                 try {
-                    fallbackTts.speak(finalReply, maleVoicePreset, scope)
+                    fallbackTts.speak(finalReply, maleVoicePreset, deepBassEnabled, scope)
                     _voicePathStatus.value = fallbackTts.voicePathStatus.value
                 } finally {
                     if (liveSession != null) {
@@ -384,6 +387,7 @@ class GeminiLiveEngine(
         question: String,
         userName: String,
         maleVoicePreset: MaleVoicePreset = MaleVoicePreset.BRITISH_JARVIS,
+        deepBassEnabled: Boolean = true,
         speakResult: Boolean,
         scope: CoroutineScope
     ): Result<String> {
@@ -408,7 +412,7 @@ class GeminiLiveEngine(
             }
             if (speakResult) {
                 _engineState.value = VoiceEngineState.SPEAKING
-                fallbackTts.speak(text, maleVoicePreset, scope)
+                fallbackTts.speak(text, maleVoicePreset, deepBassEnabled, scope)
                 _voicePathStatus.value = fallbackTts.voicePathStatus.value
             }
             _engineState.value = VoiceEngineState.IDLE

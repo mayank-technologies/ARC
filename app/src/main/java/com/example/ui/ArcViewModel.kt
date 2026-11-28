@@ -116,6 +116,9 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             effect.setMicActiveState?.let { micOn ->
                 setMicActive(micOn)
             }
+            effect.setFloatingOrbState?.let { enable ->
+                setFloatingOrbEnabled(enable)
+            }
             effect.setArmedState?.let { armed ->
                 if (armed) ensureForegroundServiceBound()
                 fgService?.setAntiTheftArmed(armed)
@@ -214,6 +217,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
     private var onlineRoutineJob: Job? = null
     private var textTurnJob: Job? = null
     private var initialRestoreHandled = false
+    private var pendingOrbEnableOnResume = false
 
     @Volatile
     private var onlineTarget: Boolean? = null
@@ -344,7 +348,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                 repository.addMessage("ARC", alert.message, "FACTUAL")
                 _statusToast.value = alert.message
                 if (isCurrentlyOnline()) {
-                    fallbackTts.speak(alert.message, st.maleVoicePreset, viewModelScope)
+                    fallbackTts.speak(alert.message, st.maleVoicePreset, st.deepBassBoostEnabled, viewModelScope)
                 }
             }
         }
@@ -492,7 +496,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                 repository.addMessage("ARC", msg, "FACTUAL")
                 if (speakReply) {
                     val st = settings.value
-                    fallbackTts.speak(msg, st.maleVoicePreset, this)
+                    fallbackTts.speak(msg, st.maleVoicePreset, st.deepBassBoostEnabled, this)
                 }
                 return@launch
             }
@@ -503,7 +507,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                 repository.addMessage("ARC", msg, "FACTUAL")
                 if (speakReply) {
                     val st = settings.value
-                    fallbackTts.speak(msg, st.maleVoicePreset, this)
+                    fallbackTts.speak(msg, st.maleVoicePreset, st.deepBassBoostEnabled, this)
                 }
                 return@launch
             }
@@ -515,7 +519,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                     _statusToast.value = warn
                     repository.addMessage("ARC", warn, "FACTUAL")
                     if (speakReply) {
-                        fallbackTts.speak(warn, st.maleVoicePreset, this)
+                        fallbackTts.speak(warn, st.maleVoicePreset, st.deepBassBoostEnabled, this)
                     }
                 }
             }
@@ -527,6 +531,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                     rawMessage = text,
                     userName = st.userName.ifBlank { "Friend" },
                     maleVoicePreset = st.maleVoicePreset,
+                    deepBassEnabled = st.deepBassBoostEnabled,
                     speakResponse = speakReply,
                     scope = this,
                     onReplyReady = { reply ->
@@ -552,7 +557,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                         repository.addMessage("ARC", fallbackMsg, "EMPATHETIC")
                         _statusToast.value = errText
                         if (speakReply) {
-                            fallbackTts.speak("Sorry, I couldn't connect right now.", st.maleVoicePreset, this)
+                            fallbackTts.speak("Sorry, I couldn't connect right now.", st.maleVoicePreset, st.deepBassBoostEnabled, this)
                         }
                     }
                 )
@@ -627,7 +632,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             val spokenGreeting = "$greeting $name, main आर्क online hoon."
             repository.addMessage("ARC", displayGreeting, "GREETING")
             if (!isActive || !isCurrentlyOnline()) return@launch
-            fallbackTts.speak(spokenGreeting, st.maleVoicePreset, this)
+            fallbackTts.speak(spokenGreeting, st.maleVoicePreset, st.deepBassBoostEnabled, this)
 
             val newsHinglish = newsDeferred.await()
             val weatherSnap = weatherDeferred.await()
@@ -659,7 +664,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             val briefingText = "$newsPart$weatherPart$taskPart".trim()
             repository.addMessage("ARC", briefingText, "FACTUAL")
             if (!isActive || !isCurrentlyOnline()) return@launch
-            fallbackTts.speak(briefingText, st.maleVoicePreset, this)
+            fallbackTts.speak(briefingText, st.maleVoicePreset, st.deepBassBoostEnabled, this)
         }
     }
 
@@ -670,6 +675,26 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                 delay(120L)
                 setMicActive(true)
             }
+        }
+    }
+
+    fun setDeepBassBoostEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.setDeepBassBoostEnabled(enabled)
+            _statusToast.value = if (enabled) "Deep Bass Resonance ON" else "Deep Bass Resonance OFF"
+        }
+    }
+
+    fun testMaleVoiceSample() {
+        viewModelScope.launch {
+            val st = settings.value
+            val name = st.userName.ifBlank { "Sir" }
+            fallbackTts.speak(
+                "Systems check ready, $name. Main आर्क hoon, aapka deep male JARVIS assistant.",
+                st.maleVoicePreset,
+                st.deepBassBoostEnabled,
+                this
+            )
         }
     }
 
@@ -793,6 +818,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
                         question = prompt,
                         userName = st.userName.ifBlank { "Friend" },
                         maleVoicePreset = st.maleVoicePreset,
+                        deepBassEnabled = st.deepBassBoostEnabled,
                         speakResult = true,
                         scope = viewModelScope
                     )
@@ -835,12 +861,38 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
         _statusToast.value = null
     }
 
+    fun markPendingOrbEnable() {
+        pendingOrbEnableOnResume = true
+    }
+
+    fun onOverlayPermissionReturned(granted: Boolean) {
+        if (granted && pendingOrbEnableOnResume) {
+            pendingOrbEnableOnResume = false
+            viewModelScope.launch {
+                prefs.setFloatingOrbEnabled(true)
+                _statusToast.value = "Floating Mini JARVIS Orb active — tap anywhere to toggle Mic!"
+            }
+        } else if (!granted) {
+            pendingOrbEnableOnResume = false
+        }
+    }
+
     fun setFloatingOrbEnabled(enabled: Boolean) {
         viewModelScope.launch {
             if (enabled && !Settings.canDrawOverlays(appContext)) {
-                _statusToast.value = "Grant Display Over Other Apps permission for Floating Mini Orb"
+                pendingOrbEnableOnResume = true
+                _statusToast.value = "Allow 'Display over other apps' — Orb will turn ON automatically"
+                runCatching {
+                    appContext.startActivity(
+                        Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:${appContext.packageName}")
+                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
                 return@launch
             }
+            pendingOrbEnableOnResume = false
             prefs.setFloatingOrbEnabled(enabled)
             _statusToast.value = if (enabled) "Floating Mini JARVIS Orb enabled" else "Floating Mini Orb hidden"
         }
@@ -855,7 +907,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             val report = snap.toHinglishReport(st.userName)
             repository.addMessage("ARC", report, "FACTUAL")
             if (speakReport) {
-                fallbackTts.speak(report, st.maleVoicePreset, this)
+                fallbackTts.speak(report, st.maleVoicePreset, st.deepBassBoostEnabled, this)
             }
         }
     }
@@ -878,7 +930,7 @@ class ArcViewModel(application: Application) : AndroidViewModel(application) {
             _statusToast.value = "${protocol.name} active"
             if (speakConfirmation && !protocol.goStandby) {
                 val st = settings.value
-                fallbackTts.speak(res.spokenHinglishSummary, st.maleVoicePreset, this)
+                fallbackTts.speak(res.spokenHinglishSummary, st.maleVoicePreset, st.deepBassBoostEnabled, this)
             }
         }
     }

@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
@@ -119,6 +120,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.compose.foundation.layout.heightIn
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ai.VoiceEngineState
@@ -204,6 +207,17 @@ fun HomeScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) viewModel.setMicActive(true)
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.onOverlayPermissionReturned(android.provider.Settings.canDrawOverlays(context))
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(Unit) {
@@ -369,6 +383,35 @@ fun HomeScreen(
                             Spacer(Modifier.width(6.dp))
                             Text("Diagnostics", style = MaterialTheme.typography.labelMedium, color = ArcTextPrimary)
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val orbActive = settings.floatingOrbEnabled && android.provider.Settings.canDrawOverlays(context)
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch { drawerState.close() }
+                            viewModel.setFloatingOrbEnabled(!orbActive)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("drawer_orb_button"),
+                        border = BorderStroke(1.dp, if (orbActive) ArcCyan else ArcGlassBorder),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Layers,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = if (orbActive) ArcCyan else ArcTextSecondary
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = if (orbActive) "Floating Mini Orb: ON (Tap to Hide)" else "Activate Floating Mini Orb",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (orbActive) ArcCyan else ArcTextPrimary
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))

@@ -5,6 +5,8 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.media.MediaPlayer
+import android.media.audiofx.BassBoost
+import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice as AndroidTtsVoice
@@ -52,12 +54,11 @@ import kotlin.math.sin
 private const val TAG = "FallbackTts"
 
 /**
- * Pure male-only speech synthesis chain for Power ON briefings, typed commands, vision Q&A,
- * proactive alerts, diagnostics, and Live fallback (female voices are permanently removed):
+ * Pure male-only speech synthesis chain with rich deep baritone bass resonance:
  * 1) ElevenLabs HD API (44.1kHz MP3, Brian / Daniel / Adam) when ELEVENLABS_API_KEY is set.
  * 2) Gemini 3.1 Flash TTS Male (`gemini-3.1-flash-tts-preview` via Firebase AI Logic, zero API key)
- *    using Orus / Charon / Algenib and raw 24kHz PCM AudioTrack playback.
- * 3) Strict Male-Only Android native TextToSpeech offline fallback with Google/OEM male voice IDs.
+ *    with baritone style direction, controlled pitch-lowering AudioTrack playback, and BassBoost.
+ * 3) Strict Male-Only Android native TextToSpeech offline fallback with deep pitch tuning.
  */
 @OptIn(PublicPreviewAPI::class)
 class FallbackTtsManager(
@@ -74,6 +75,7 @@ class FallbackTtsManager(
     private var ttsReady = false
     private var mediaPlayer: MediaPlayer? = null
     private var audioTrack: AudioTrack? = null
+    private var bassBoost: BassBoost? = null
     private var pulseJob: Job? = null
 
     private val _isSpeaking = MutableStateFlow(false)
@@ -100,6 +102,7 @@ class FallbackTtsManager(
     suspend fun speak(
         text: String,
         malePreset: MaleVoicePreset = MaleVoicePreset.BRITISH_JARVIS,
+        deepBassEnabled: Boolean = true,
         scope: CoroutineScope
     ) {
         val spokenText = ContextDetector.formatForNaturalSpeech(text)
@@ -108,22 +111,23 @@ class FallbackTtsManager(
 
         val elevenKey = BuildConfig.ELEVENLABS_API_KEY.trim()
         if (elevenKey.isNotBlank() && !elevenKey.startsWith("MY_")) {
-            val played = tryElevenLabs(spokenText, malePreset.elevenLabsVoiceId, elevenKey, scope)
+            val played = tryElevenLabs(spokenText, malePreset.elevenLabsVoiceId, elevenKey, deepBassEnabled, scope)
             if (played) return
         }
 
         // Primary zero-key online path: Gemini 3.1 Flash TTS Male (Orus / Charon / Algenib)
-        val geminiPlayed = tryGeminiTtsMale(spokenText, malePreset)
+        val geminiPlayed = tryGeminiTtsMale(spokenText, malePreset, deepBassEnabled)
         if (geminiPlayed) return
 
         // Offline / last-resort fallback: Strict Male-only Android native TextToSpeech
         _voicePathStatus.value = VoicePathStatus.DEVICE_TTS_FALLBACK
-        speakWithMaleAndroidTts(spokenText, scope)
+        speakWithMaleAndroidTts(spokenText, deepBassEnabled, scope)
     }
 
     private suspend fun tryGeminiTtsMale(
         text: String,
-        malePreset: MaleVoicePreset
+        malePreset: MaleVoicePreset,
+        deepBassEnabled: Boolean
     ): Boolean {
         return try {
             val config = generationConfig {
@@ -136,9 +140,16 @@ class FallbackTtsManager(
                 modelName = "gemini-3.1-flash-tts-preview",
                 generationConfig = config
             )
+            // Guide Gemini TTS register with Instruction: Text format so style cue shapes pitch without being read aloud
+            val directedPrompt = if (deepBassEnabled) {
+                "Say in a very deep, calm, resonant baritone bass voice at a steady composed pace: $text"
+            } else {
+                "Say in a calm, steady male voice: $text"
+            }
+
             val response = withTimeout(30_000L) {
                 withContext(Dispatchers.IO) {
-                    model.generateContent(text)
+                    model.generateContent(directedPrompt)
                 }
             }
             val parts = response.candidates.firstOrNull()?.content?.parts.orEmpty()
@@ -159,7 +170,7 @@ class FallbackTtsManager(
 
             _ttsDiagnostic.value = null
             _voicePathStatus.value = VoicePathStatus.GEMINI_TTS_MALE
-            playPcmAudio(pcmBytes, sampleRate)
+            playPcmAudio(pcmBytes, sampleRate, malePreset, deepBassEnabled)
             true
         } catch (e: CancellationException) {
             throw e
@@ -177,9 +188,19 @@ class FallbackTtsManager(
         return match.groupValues.getOrNull(1)?.toIntOrNull()?.takeIf { it in 8000..48000 }
     }
 
-    private suspend fun playPcmAudio(pcmBytes: ByteArray, sampleRate: Int) = withContext(Dispatchers.IO) {
+    private suspend fun playPcmAudio(
+        pcmBytes: ByteArray,
+        sampleRate: Int,
+        malePreset: MaleVoicePreset,
+        deepBassEnabled: Boolean
+    ) = withContext(Dispatchers.IO) {
+        val effectiveRate = if (deepBassEnabled) {
+            (sampleRate * malePreset.deepBassPitchMultiplier).toInt().coerceIn(16000, sampleRate)
+        } else {
+            sampleRate
+        }
         val minBuf = AudioTrack.getMinBufferSize(
-            sampleRate,
+            effectiveRate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(4800)
@@ -194,7 +215,7 @@ class FallbackTtsManager(
             .setAudioFormat(
                 AudioFormat.Builder()
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
+                    .setSampleRate(effectiveRate)
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
             )
@@ -203,6 +224,9 @@ class FallbackTtsManager(
             .build()
 
         audioTrack = track
+        if (deepBassEnabled) {
+            attachBassBoost(track.audioSessionId)
+        }
         audioRouting.requestMediaSpeechFocus()
         _isSpeaking.value = true
 
@@ -216,7 +240,6 @@ class FallbackTtsManager(
                 if (written <= 0) break
                 offset += written
 
-                // Drive sphere pulse directly from real male voice PCM energy
                 var energySum = 0.0
                 var i = offset - written
                 val end = offset - 1
@@ -230,10 +253,9 @@ class FallbackTtsManager(
                 _waveformLevel.value = norm
             }
 
-            // Wait cleanly for buffered PCM frames to finish playing unless cancelled
             val totalFrames = pcmBytes.size / 2
             var drainWaitMs = 0L
-            while (isActive && _isSpeaking.value && track.playbackHeadPosition < totalFrames && drainWaitMs < 3000L) {
+            while (isActive && _isSpeaking.value && track.playbackHeadPosition < totalFrames && drainWaitMs < 3500L) {
                 delay(30L)
                 drainWaitMs += 30L
             }
@@ -241,6 +263,7 @@ class FallbackTtsManager(
             _isSpeaking.value = false
             _waveformLevel.value = 0f
             audioRouting.abandonMediaSpeechFocus()
+            releaseBassBoost()
             runCatching {
                 track.pause()
                 track.flush()
@@ -253,14 +276,38 @@ class FallbackTtsManager(
         }
     }
 
+    private fun attachBassBoost(audioSessionId: Int) {
+        releaseBassBoost()
+        runCatching {
+            if (audioSessionId > 0) {
+                bassBoost = BassBoost(0, audioSessionId).apply {
+                    if (strengthSupported) {
+                        setStrength(700.toShort())
+                    }
+                    enabled = true
+                }
+            }
+        }.onFailure {
+            Log.d(TAG, "BassBoost unavailable on device output: ${it.message}")
+        }
+    }
+
+    private fun releaseBassBoost() {
+        runCatching {
+            bassBoost?.enabled = false
+            bassBoost?.release()
+        }
+        bassBoost = null
+    }
+
     private suspend fun tryElevenLabs(
         text: String,
         voiceId: String,
         apiKey: String,
+        deepBassEnabled: Boolean,
         scope: CoroutineScope
     ): Boolean = withContext(Dispatchers.IO) {
         try {
-            // Request wideband 44.1kHz 128kbps MP3 so low-end male chest resonance stays rich
             val url = "https://api.elevenlabs.io/v1/text-to-speech/$voiceId?output_format=mp3_44100_128"
             val payload = JSONObject().apply {
                 put("text", text)
@@ -268,7 +315,7 @@ class FallbackTtsManager(
                 put("voice_settings", JSONObject().apply {
                     put("stability", 0.45)
                     put("similarity_boost", 0.78)
-                    put("style", 0.08) // Low style avoids vocal wobble/metallic artifacts on deep voices
+                    put("style", 0.08)
                     put("use_speaker_boost", true)
                 })
             }.toString()
@@ -282,8 +329,7 @@ class FallbackTtsManager(
 
             httpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) {
-                    val reason = "ElevenLabs HTTP ${resp.code}"
-                    Log.w(TAG, reason)
+                    Log.w(TAG, "ElevenLabs HTTP ${resp.code}")
                     return@withContext false
                 }
                 val bytes = resp.body?.bytes() ?: return@withContext false
@@ -293,7 +339,7 @@ class FallbackTtsManager(
                 _ttsDiagnostic.value = null
                 _voicePathStatus.value = VoicePathStatus.ELEVENLABS_HD
                 withContext(Dispatchers.Main) {
-                    playMp3File(tempFile, scope)
+                    playMp3File(tempFile, deepBassEnabled, scope)
                 }
                 true
             }
@@ -305,7 +351,7 @@ class FallbackTtsManager(
         }
     }
 
-    private suspend fun playMp3File(file: File, scope: CoroutineScope) {
+    private suspend fun playMp3File(file: File, deepBassEnabled: Boolean, scope: CoroutineScope) {
         suspendCancellableCoroutine { cont ->
             try {
                 audioRouting.requestMediaSpeechFocus()
@@ -324,6 +370,7 @@ class FallbackTtsManager(
                         _waveformLevel.value = 0f
                         pulseJob?.cancel()
                         audioRouting.abandonMediaSpeechFocus()
+                        releaseBassBoost()
                         runCatching { file.delete() }
                         it.release()
                         mediaPlayer = null
@@ -334,6 +381,7 @@ class FallbackTtsManager(
                         _waveformLevel.value = 0f
                         pulseJob?.cancel()
                         audioRouting.abandonMediaSpeechFocus()
+                        releaseBassBoost()
                         runCatching { file.delete() }
                         player.release()
                         mediaPlayer = null
@@ -341,6 +389,14 @@ class FallbackTtsManager(
                         true
                     }
                     prepare()
+                    if (deepBassEnabled) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            runCatching {
+                                playbackParams = playbackParams.setPitch(0.86f).setSpeed(0.96f)
+                            }
+                        }
+                        attachBassBoost(audioSessionId)
+                    }
                     start()
                 }
                 mediaPlayer = mp
@@ -352,12 +408,17 @@ class FallbackTtsManager(
                 _isSpeaking.value = false
                 pulseJob?.cancel()
                 audioRouting.abandonMediaSpeechFocus()
+                releaseBassBoost()
                 if (cont.isActive) cont.resume(Unit)
             }
         }
     }
 
-    private suspend fun speakWithMaleAndroidTts(text: String, scope: CoroutineScope) {
+    private suspend fun speakWithMaleAndroidTts(
+        text: String,
+        deepBassEnabled: Boolean,
+        scope: CoroutineScope
+    ) {
         val tts = androidTts ?: return
         var waitedMs = 0L
         while (!ttsReady && waitedMs < 2500L) {
@@ -381,11 +442,10 @@ class FallbackTtsManager(
 
             if (maleVoice != null) {
                 tts.voice = maleVoice
-                tts.setPitch(0.88f)
-                tts.setSpeechRate(0.95f)
+                tts.setPitch(if (deepBassEnabled) 0.72f else 0.86f)
+                tts.setSpeechRate(0.92f)
                 Log.d(TAG, "Selected offline male Android TTS voice: ${maleVoice.name}")
             } else {
-                // Never choose an explicit female voice if avoidable; apply deep baritone tuning
                 val nonFemaleVoice = voices
                     .filter { !isKnownFemaleVoice(it.name, it.features) }
                     .sortedWith(
@@ -399,8 +459,8 @@ class FallbackTtsManager(
                 } else {
                     tts.language = Locale.ENGLISH
                 }
-                tts.setPitch(0.78f)
-                tts.setSpeechRate(0.94f)
+                tts.setPitch(if (deepBassEnabled) 0.62f else 0.76f)
+                tts.setSpeechRate(0.92f)
                 Log.w(TAG, "No explicit male offline TTS voice installed; using deep-pitch fallback.")
             }
 
@@ -442,7 +502,6 @@ class FallbackTtsManager(
         pulseJob = scope.launch {
             var t = 0f
             while (_isSpeaking.value) {
-                // Multi-harmonic syllable envelope (0.14..0.96) for natural in-out sphere breathing
                 val syllable = 0.5f + 0.5f * sin(t * 2.1f)
                 val phrase = 0.5f + 0.5f * sin(t * 0.73f + 1.1f)
                 val accent = abs(sin(t * 3.4f))
@@ -459,6 +518,7 @@ class FallbackTtsManager(
         _isSpeaking.value = false
         _waveformLevel.value = 0f
         audioRouting.abandonMediaSpeechFocus()
+        releaseBassBoost()
         runCatching {
             audioTrack?.pause()
             audioTrack?.flush()
@@ -481,22 +541,21 @@ class FallbackTtsManager(
     }
 
     companion object {
+        private val MALE_CODE_REGEX = Regex(
+            """(^|[-_#])(male|m|iom|iol|iob|gbb|gbd|tpd|enc|end|ene|enm|hid|hie|sfb|rjs|ahp)([-_#]|$)"""
+        )
+
         private val MALE_TOKENS = listOf(
-            "#male", "-male", "_male", "male",
-            "-iom-", "-iol-", "-iob-",
-            "-gbb-", "-gbd-",
-            "-tpd-", "-sfb-",
-            "-enc-", "-end-", "-ene-",
-            "-hid-", "-hie-",
+            "#male", "-male", "_male",
             "prabhat", "madhur", "daniel", "brian", "ryan", "arthur", "guy"
         )
 
+        private val FEMALE_CODE_REGEX = Regex(
+            """(^|[-_#])(female|f|iog|sfg|tpf|ena|enb|hia|hib|hic|gba|gbc|gbf)([-_#]|$)"""
+        )
+
         private val FEMALE_TOKENS = listOf(
-            "#female", "-female", "_female", "female",
-            "-iog-", "-sfg-", "-tpf-",
-            "-ena-", "-enb-",
-            "-hia-", "-hib-", "-hic-",
-            "-gba-", "-gbc-", "-gbf-",
+            "#female", "-female", "_female",
             "neerja", "swara", "kalpana", "heera", "samantha", "karen", "victoria"
         )
 
@@ -508,7 +567,8 @@ class FallbackTtsManager(
                 fl.contains("male") && !fl.contains("female")
             } == true
             if (hasMaleFeature) return true
-            return MALE_TOKENS.any { token -> n.contains(token) } ||
+            return MALE_CODE_REGEX.containsMatchIn(n) ||
+                MALE_TOKENS.any { token -> n.contains(token) } ||
                 Regex("""\bmale\b""").containsMatchIn(n)
         }
 
@@ -516,7 +576,8 @@ class FallbackTtsManager(
             val n = name.lowercase(Locale.ROOT)
             val hasFemaleFeature = features?.any { it.lowercase(Locale.ROOT).contains("female") } == true
             if (hasFemaleFeature) return true
-            return FEMALE_TOKENS.any { token -> n.contains(token) } ||
+            return FEMALE_CODE_REGEX.containsMatchIn(n) ||
+                FEMALE_TOKENS.any { token -> n.contains(token) } ||
                 Regex("""\bfemale\b""").containsMatchIn(n)
         }
 

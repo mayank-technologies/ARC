@@ -151,7 +151,9 @@ fun SettingsScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                overlayPermissionGranted = Settings.canDrawOverlays(context)
+                val granted = Settings.canDrawOverlays(context)
+                overlayPermissionGranted = granted
+                viewModel.onOverlayPermissionReturned(granted)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -260,6 +262,49 @@ fun SettingsScreen(
                                     }
                                 }
                             }
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+                                Text(
+                                    text = "Deep Bass Resonance",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = ArcTextPrimary
+                                )
+                                Text(
+                                    text = "Lowers chest pitch & boosts warm sub-bass on mobile speakers.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ArcTextSecondary
+                                )
+                            }
+                            Switch(
+                                checked = settings.deepBassBoostEnabled,
+                                onCheckedChange = { viewModel.setDeepBassBoostEnabled(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = ArcVoid,
+                                    checkedTrackColor = ArcCyan,
+                                    uncheckedThumbColor = ArcTextSecondary,
+                                    uncheckedTrackColor = ArcSurfaceElevated
+                                ),
+                                modifier = Modifier.testTag("deep_bass_switch")
+                            )
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = { viewModel.testMaleVoiceSample() },
+                            border = BorderStroke(1.dp, ArcCyan.copy(alpha = 0.55f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("test_male_voice_button")
+                        ) {
+                            Text("Test Deep Male Voice", color = ArcCyan, fontWeight = FontWeight.SemiBold)
                         }
 
                         Spacer(Modifier.height(12.dp))
@@ -396,13 +441,8 @@ fun SettingsScreen(
                                 checked = settings.floatingOrbEnabled && overlayPermissionGranted,
                                 onCheckedChange = { enabled ->
                                     if (enabled && !Settings.canDrawOverlays(context)) {
+                                        viewModel.markPendingOrbEnable()
                                         viewModel.setFloatingOrbEnabled(true)
-                                        context.startActivity(
-                                            Intent(
-                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                                Uri.parse("package:${context.packageName}")
-                                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        )
                                     } else {
                                         viewModel.setFloatingOrbEnabled(enabled)
                                     }
@@ -420,12 +460,8 @@ fun SettingsScreen(
                             Spacer(Modifier.height(10.dp))
                             OutlinedButton(
                                 onClick = {
-                                    context.startActivity(
-                                        Intent(
-                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:${context.packageName}")
-                                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
+                                    viewModel.markPendingOrbEnable()
+                                    viewModel.setFloatingOrbEnabled(true)
                                 },
                                 border = BorderStroke(1.dp, ArcCyan.copy(alpha = 0.55f)),
                                 modifier = Modifier
@@ -433,7 +469,7 @@ fun SettingsScreen(
                                     .heightIn(min = 48.dp)
                                     .testTag("grant_overlay_permission_button")
                             ) {
-                                Text("Grant Overlay Permission", color = ArcCyan)
+                                Text("Grant Overlay & Activate Orb", color = ArcCyan)
                             }
                         }
                     }
